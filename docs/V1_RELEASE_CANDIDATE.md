@@ -92,6 +92,7 @@ Already qualified:
 - focused real hpc.example SSH transport cut/recovery on Job <job-id>: `fresh -> unreachable -> fresh`, same JobID, then exactly-once offline continuation;
 - explicit real-Pi live failure regression: completion remains durable, no false settlement is written, and Delivery is retried rather than acked delivered;
 - current-HEAD packaged repeat qualification: 456.473 s, 2 rounds / 4 real cases, concurrent Local + Slurm, two resident serve restarts, two real same-session rebind recoveries, Slurm Job <job-id>, and exactly-once final continuation evidence. This increases repetition evidence but is intentionally not counted as the multi-hour gate.
+- focused packaged Slurm-only rebind qualification on Job <job-id> after explicit `pi-ssh-tools` extension resolution: zero wrong-branch completion/settlement, exactly one `runs_rebind`, Delivery attempt 2 final success, and exact `runs_status/runs_logs/ssh_activate/ssh_read` result inspection.
 
 Still blocking a v1 tag:
 

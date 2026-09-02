@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -33,10 +33,89 @@ const DEFAULT_REBIND_EVERY = 0;
 const DEFAULT_SETTLEMENT_CRASH_EVERY = 0;
 const DEFAULT_SSH_FAULT_EVERY = 0;
 const DEFAULT_SSH_FAULT_SEC = 8;
+const ENDURANCE_SESSION_FILE = "endurance-session.json";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled", "timed_out", "lost"]);
 
 function safeNonce() {
   return `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function frozenPlan(plan) {
+  return {
+    modes: [...plan.modes],
+    run_delay_sec: plan.runDelaySec,
+    restart_every: plan.restartEvery,
+    rebind_every: plan.rebindEvery,
+    settlement_crash_every: plan.settlementCrashEvery,
+    ssh_fault_every: plan.sshFaultEvery,
+    ssh_fault_sec: plan.sshFaultSec,
+  };
+}
+
+export function buildEnduranceContract(options, resources) {
+  return {
+    model: options.model,
+    thinking: options.thinking,
+    host: options.host || null,
+    workdir: options.workdir || null,
+    target_duration_sec: options.targetDurationSec ?? null,
+    plan: frozenPlan(options.plan),
+    artifacts: {
+      runwatch_sha256: sha256File(options.runwatchExe),
+      pi_runs_extension_sha256: sha256File(resources.extension),
+      pi_api_module_sha256: resources.piApiModule ? sha256File(resources.piApiModule) : null,
+      pi_ssh_tools_extension_sha256: resources.piSshToolsExtension
+        ? sha256File(resources.piSshToolsExtension)
+        : null,
+    },
+  };
+}
+
+export function assertEnduranceContract(expected, actual) {
+  assert.deepEqual(actual, expected, "resume invocation must match the frozen endurance contract");
+}
+
+export function aggregateEnduranceProgress(segmentSummaries) {
+  const summaries = [...segmentSummaries].sort((a, b) => Number(a.segment) - Number(b.segment));
+  return {
+    segments_completed: summaries.length,
+    rounds_completed: summaries.reduce((sum, item) => sum + Number(item.rounds_completed || 0), 0),
+    total_cases: summaries.reduce((sum, item) => sum + Number(item.total_cases || 0), 0),
+    active_elapsed_sec: Number(
+      summaries.reduce((sum, item) => sum + Number(item.elapsed_sec || 0), 0).toFixed(3),
+    ),
+    last_round: summaries.reduce((max, item) => Math.max(max, Number(item.round_end || 0)), 0),
+  };
+}
+
+async function existingSegmentState(evidenceDir) {
+  const entries = await readdir(evidenceDir, { withFileTypes: true });
+  const segmentIds = [];
+  let maxRound = 0;
+  const summaries = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const segmentMatch = /^segment-(\d{4})$/.exec(entry.name);
+      if (segmentMatch) {
+        const segment = Number(segmentMatch[1]);
+        segmentIds.push(segment);
+        const summaryPath = join(evidenceDir, entry.name, "segment-summary.json");
+        if (existsSync(summaryPath)) summaries.push(JSON.parse(await readFile(summaryPath, "utf8")));
+      }
+      const roundMatch = /^round-(\d{4})$/.exec(entry.name);
+      if (roundMatch) maxRound = Math.max(maxRound, Number(roundMatch[1]));
+    }
+  }
+  return {
+    next_segment: (segmentIds.length ? Math.max(...segmentIds) : 0) + 1,
+    next_round: maxRound + 1,
+    summaries,
+    progress: aggregateEnduranceProgress(summaries),
+  };
 }
 
 export function parseModes(value) {
@@ -58,6 +137,7 @@ export function buildSoakPlan(options) {
   const modes = parseModes(options.modes);
   const rounds = options.rounds === undefined ? 1 : Number(options.rounds);
   const durationSec = options.durationSec === undefined ? undefined : Number(options.durationSec);
+  const targetDurationSec = options.targetDurationSec === undefined ? undefined : Number(options.targetDurationSec);
   const runDelaySec = Number(options.runDelaySec ?? DEFAULT_RUN_DELAY_SEC);
   const restartEvery = Number(options.restartEvery ?? 1);
   const rebindEvery = Number(options.rebindEvery ?? DEFAULT_REBIND_EVERY);
@@ -71,6 +151,12 @@ export function buildSoakPlan(options) {
   }
   if (durationSec !== undefined && (!Number.isFinite(durationSec) || durationSec < 30 || durationSec > 86_400)) {
     throw new Error("--duration-sec must be between 30 and 86400");
+  }
+  if (
+    targetDurationSec !== undefined &&
+    (!Number.isFinite(targetDurationSec) || targetDurationSec < 60 || targetDurationSec > 86_400)
+  ) {
+    throw new Error("--target-duration-sec must be between 60 and 86400");
   }
   if (!Number.isInteger(runDelaySec) || runDelaySec < 2 || runDelaySec > 600) {
     throw new Error("--run-delay-sec must be an integer between 2 and 600");
@@ -110,6 +196,7 @@ export function buildSoakPlan(options) {
     modes,
     rounds,
     durationSec,
+    targetDurationSec,
     runDelaySec,
     restartEvery,
     rebindEvery,
@@ -134,6 +221,7 @@ function parseArgs(argv) {
     sshFaultSec: DEFAULT_SSH_FAULT_SEC,
     timeoutSec: DEFAULT_TIMEOUT_SEC,
     evidenceRoot: resolve("acceptance-output"),
+    resumeEvidenceDir: undefined,
   };
   const valueFlags = new Set([
     "--runwatch-exe",
@@ -144,6 +232,7 @@ function parseArgs(argv) {
     "--modes",
     "--rounds",
     "--duration-sec",
+    "--target-duration-sec",
     "--run-delay-sec",
     "--restart-every",
     "--rebind-every",
@@ -153,6 +242,7 @@ function parseArgs(argv) {
     "--pi-api-module",
     "--timeout-sec",
     "--evidence-root",
+    "--resume-evidence-dir",
     "--pi-executable",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
@@ -173,6 +263,7 @@ function parseArgs(argv) {
       case "--modes": result.modes = value; break;
       case "--rounds": result.rounds = Number(value); break;
       case "--duration-sec": result.durationSec = Number(value); break;
+      case "--target-duration-sec": result.targetDurationSec = Number(value); break;
       case "--run-delay-sec": result.runDelaySec = Number(value); break;
       case "--restart-every": result.restartEvery = Number(value); break;
       case "--rebind-every": result.rebindEvery = Number(value); break;
@@ -182,6 +273,7 @@ function parseArgs(argv) {
       case "--pi-api-module": result.piApiModule = resolve(value); break;
       case "--timeout-sec": result.timeoutSec = Number(value); break;
       case "--evidence-root": result.evidenceRoot = resolve(value); break;
+      case "--resume-evidence-dir": result.resumeEvidenceDir = resolve(value); break;
       case "--pi-executable": result.piExecutable = value; break;
       default: throw new Error(`unhandled argument ${arg}`);
     }
