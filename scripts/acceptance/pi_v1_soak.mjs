@@ -2,10 +2,10 @@
 
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 
 import { clientInfo, request, statusRun } from "../../src/runwatch-client.mjs";
@@ -35,6 +35,8 @@ const DEFAULT_SSH_FAULT_EVERY = 0;
 const DEFAULT_SSH_FAULT_SEC = 8;
 const ENDURANCE_SESSION_FILE = "endurance-session.json";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled", "timed_out", "lost"]);
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const TREE_SKIP_DIRS = new Set([".git", "node_modules", "acceptance-output"]);
 
 function safeNonce() {
   return `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
@@ -42,6 +44,68 @@ function safeNonce() {
 
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+function collectTreeFiles(path, files = []) {
+  const stat = statSync(path);
+  if (stat.isFile()) {
+    files.push(resolve(path));
+    return files;
+  }
+  if (!stat.isDirectory()) return files;
+  for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory() && TREE_SKIP_DIRS.has(entry.name)) continue;
+    collectTreeFiles(join(path, entry.name), files);
+  }
+  return files;
+}
+
+function sha256Paths(paths, baseDir, predicate = () => true) {
+  const files = paths.flatMap((path) => collectTreeFiles(path)).filter(predicate);
+  const hash = createHash("sha256");
+  for (const path of files.sort((a, b) => a.localeCompare(b))) {
+    const label = relative(baseDir, path).replaceAll("\\", "/");
+    hash.update(label);
+    hash.update("\0");
+    hash.update(readFileSync(path));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function nearestPackageRoot(path) {
+  let current = dirname(resolve(path));
+  while (true) {
+    if (existsSync(join(current, "package.json"))) return current;
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`could not locate package.json above ${path}`);
+    current = parent;
+  }
+}
+
+function piRunsContractTreeSha256() {
+  return sha256Paths(
+    [
+      join(PACKAGE_ROOT, "package.json"),
+      join(PACKAGE_ROOT, "extensions"),
+      join(PACKAGE_ROOT, "src"),
+      join(PACKAGE_ROOT, "scripts", "acceptance"),
+    ],
+    PACKAGE_ROOT,
+  );
+}
+
+function externalExtensionCodeSha256(extensionPath) {
+  if (!extensionPath) return null;
+  const root = nearestPackageRoot(extensionPath);
+  return sha256Paths(
+    [root],
+    root,
+    (path) => {
+      const rel = relative(root, path).replaceAll("\\", "/");
+      if (rel.startsWith("docs/") || /(^|\/)test(s)?\//i.test(rel) || /\.test\.[^.]+$/i.test(rel)) return false;
+      return rel === "package.json" || /\.(?:[cm]?js|ts|json)$/i.test(rel);
+    },
+  );
 }
 
 function frozenPlan(plan) {
@@ -66,11 +130,14 @@ export function buildEnduranceContract(options, resources) {
     plan: frozenPlan(options.plan),
     artifacts: {
       runwatch_sha256: sha256File(options.runwatchExe),
+      pi_runs_contract_tree_sha256: piRunsContractTreeSha256(),
       pi_runs_extension_sha256: sha256File(resources.extension),
       pi_api_module_sha256: resources.piApiModule ? sha256File(resources.piApiModule) : null,
+      pi_api_code_sha256: externalExtensionCodeSha256(resources.piApiModule),
       pi_ssh_tools_extension_sha256: resources.piSshToolsExtension
         ? sha256File(resources.piSshToolsExtension)
         : null,
+      pi_ssh_tools_code_sha256: externalExtensionCodeSha256(resources.piSshToolsExtension),
     },
   };
 }
@@ -97,6 +164,9 @@ async function existingSegmentState(evidenceDir) {
   const segmentIds = [];
   let maxRound = 0;
   const summaries = [];
+  const failedSegments = [];
+  const incompleteSegments = [];
+  const ambiguousSegments = [];
   for (const entry of entries) {
     if (entry.isDirectory()) {
       const segmentMatch = /^segment-(\d{4})$/.exec(entry.name);
@@ -104,18 +174,48 @@ async function existingSegmentState(evidenceDir) {
         const segment = Number(segmentMatch[1]);
         segmentIds.push(segment);
         const summaryPath = join(evidenceDir, entry.name, "segment-summary.json");
-        if (existsSync(summaryPath)) summaries.push(JSON.parse(await readFile(summaryPath, "utf8")));
+        const failurePath = join(evidenceDir, entry.name, "failure.json");
+        const hasSummary = existsSync(summaryPath);
+        const hasFailure = existsSync(failurePath);
+        if (hasSummary && hasFailure) ambiguousSegments.push(segment);
+        else if (hasSummary) summaries.push(JSON.parse(await readFile(summaryPath, "utf8")));
+        else if (hasFailure) failedSegments.push(segment);
+        else incompleteSegments.push(segment);
       }
       const roundMatch = /^round-(\d{4})$/.exec(entry.name);
       if (roundMatch) maxRound = Math.max(maxRound, Number(roundMatch[1]));
     }
   }
+  const maxSegment = segmentIds.length ? Math.max(...segmentIds) : 0;
+  const segmentSet = new Set(segmentIds);
+  const missingSegments = [];
+  for (let segment = 1; segment <= maxSegment; segment += 1) {
+    if (!segmentSet.has(segment)) missingSegments.push(segment);
+  }
   return {
-    next_segment: (segmentIds.length ? Math.max(...segmentIds) : 0) + 1,
+    next_segment: maxSegment + 1,
     next_round: maxRound + 1,
     summaries,
+    failed_segments: failedSegments,
+    incomplete_segments: incompleteSegments,
+    ambiguous_segments: ambiguousSegments,
+    missing_segments: missingSegments,
     progress: aggregateEnduranceProgress(summaries),
   };
+}
+
+export function assertResumableEnduranceState(prior) {
+  const blockers = [
+    ["failed", prior.failed_segments || []],
+    ["incomplete", prior.incomplete_segments || []],
+    ["ambiguous", prior.ambiguous_segments || []],
+    ["missing", prior.missing_segments || []],
+  ].filter(([, segments]) => segments.length > 0);
+  if (blockers.length === 0) return;
+  const detail = blockers.map(([kind, segments]) => `${kind}=${segments.join(",")}`).join(" ");
+  throw new Error(
+    `endurance session is not resumable because a prior segment is not cleanly successful: ${detail}; start a new endurance session after diagnosing the preserved evidence`,
+  );
 }
 
 export function parseModes(value) {
@@ -996,14 +1096,58 @@ export async function runSoak(options) {
   const piSshToolsExtension = options.plan.modes.includes("slurm")
     ? preflightPiSshTools({ mode: "slurm", piExecutable: options.piExecutable })
     : null;
-  const nonce = safeNonce();
-  const evidenceDir = resolve(options.evidenceRoot, `soak-${nonce}`);
-  await mkdir(evidenceDir, { recursive: false });
+  const extension = resolve("extensions/runs/index.ts");
+  const piApiModule = options.plan.rebindEvery > 0 ? resolvePiApiModule(options) : null;
+  const resources = { extension, piApiModule, piSshToolsExtension };
+  const contract = buildEnduranceContract(options, resources);
+
+  let nonce;
+  let evidenceDir;
+  let runwatchDataDir;
+  let endpoint;
+  if (options.resumeEvidenceDir) {
+    evidenceDir = resolve(options.resumeEvidenceDir);
+    const sessionPath = join(evidenceDir, ENDURANCE_SESSION_FILE);
+    if (!existsSync(sessionPath)) throw new Error(`resume endurance session missing ${sessionPath}`);
+    const session = JSON.parse(await readFile(sessionPath, "utf8"));
+    if (session?.schema_version !== 1 || !session?.nonce || !session?.runtime) {
+      throw new Error(`invalid endurance session manifest ${sessionPath}`);
+    }
+    assertEnduranceContract(session.contract, contract);
+    nonce = session.nonce;
+    runwatchDataDir = session.runtime.runwatch_data_dir;
+    endpoint = session.runtime.endpoint;
+  } else {
+    nonce = safeNonce();
+    evidenceDir = resolve(options.evidenceRoot, `soak-${nonce}`);
+    await mkdir(evidenceDir, { recursive: false });
+    runwatchDataDir = join(evidenceDir, "runwatch-data");
+    endpoint = endpointFor(`soak-${nonce}`);
+    const session = {
+      schema_version: 1,
+      nonce,
+      created_at: new Date().toISOString(),
+      contract,
+      runtime: {
+        runwatch_data_dir: runwatchDataDir,
+        endpoint,
+      },
+    };
+    await writeFile(
+      join(evidenceDir, ENDURANCE_SESSION_FILE),
+      `${JSON.stringify(session, null, 2)}\n`,
+      { encoding: "utf8", flag: "wx" },
+    );
+  }
+
+  const prior = await existingSegmentState(evidenceDir);
+  assertResumableEnduranceState(prior);
+  const segment = prior.next_segment;
+  const segmentDir = join(evidenceDir, `segment-${String(segment).padStart(4, "0")}`);
+  await mkdir(segmentDir, { recursive: false });
   const sshFault = options.plan.sshFaultEvery > 0
-    ? await prepareRunwatchSshFaultProfile({ alias: options.host, evidenceDir, env: process.env })
+    ? await prepareRunwatchSshFaultProfile({ alias: options.host, evidenceDir: segmentDir, env: process.env })
     : null;
-  const runwatchDataDir = join(evidenceDir, "runwatch-data");
-  const endpoint = endpointFor(`soak-${nonce}`);
   const env = {
     ...process.env,
     RUNWATCH_DATA_DIR: runwatchDataDir,
@@ -1013,8 +1157,6 @@ export async function runSoak(options) {
   const runwatchEnv = sshFault
     ? { ...env, RUNWATCH_SSH_CONFIG: sshFault.configPath }
     : env;
-  const extension = resolve("extensions/runs/index.ts");
-  const piApiModule = options.plan.rebindEvery > 0 ? resolvePiApiModule(options) : null;
   const shared = {
     nonce,
     evidenceDir,
@@ -1030,7 +1172,7 @@ export async function runSoak(options) {
     sshFault,
     sshFaultSec: options.plan.sshFaultSec,
   };
-  const supervisorLogs = openProcessLogs(evidenceDir, "runwatch-supervisor");
+  const supervisorLogs = openProcessLogs(segmentDir, "runwatch-supervisor");
   const supervisor = spawn(options.runwatchExe, ["supervise", "--interval", "1"], {
     cwd: dirname(options.runwatchExe),
     env: runwatchEnv,
@@ -1038,37 +1180,32 @@ export async function runSoak(options) {
     stdio: ["ignore", supervisorLogs.stdoutFd, supervisorLogs.stderrFd],
   });
   const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   const deadline = options.plan.durationSec === undefined ? undefined : startedAt + options.plan.durationSec * 1000;
   const rounds = [];
+  const roundStart = prior.next_round;
   try {
     const readiness = await waitForRuntime(env);
-    let round = 1;
+    let round = roundStart;
     while (true) {
       rounds.push(await runRound(options, shared, round));
       if (deadline !== undefined) {
         if (Date.now() >= deadline) break;
-      } else if (round >= options.plan.rounds) {
+      } else if (rounds.length >= options.plan.rounds) {
         break;
       }
       round += 1;
     }
-    const summary = {
+    const elapsedSec = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+    const segmentSummary = {
       schema_version: 1,
       ok: true,
-      model: options.model,
-      thinking: options.thinking,
-      modes: options.plan.modes,
-      configured_rounds: options.plan.rounds,
-      duration_sec: options.plan.durationSec,
-      elapsed_sec: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
-      run_delay_sec: options.plan.runDelaySec,
-      restart_every: options.plan.restartEvery,
-      rebind_every: options.plan.rebindEvery,
-      settlement_crash_every: options.plan.settlementCrashEvery,
-      ssh_fault_every: options.plan.sshFaultEvery,
-      ssh_fault_sec: options.plan.sshFaultSec,
-      pi_api_module: piApiModule,
-      pi_ssh_tools_extension: piSshToolsExtension,
+      segment,
+      started_at: startedAtIso,
+      ended_at: new Date().toISOString(),
+      elapsed_sec: elapsedSec,
+      round_start: roundStart,
+      round_end: rounds.at(-1)?.round || roundStart - 1,
       rounds_completed: rounds.length,
       total_cases: rounds.reduce((sum, item) => sum + item.cases.length, 0),
       runwatch: {
@@ -1080,7 +1217,46 @@ export async function runSoak(options) {
         ssh_fault_relay_port: sshFault?.relayPort || null,
       },
       rounds,
+    };
+    await writeFile(
+      join(segmentDir, "segment-summary.json"),
+      `${JSON.stringify(segmentSummary, null, 2)}\n`,
+      { encoding: "utf8", flag: "wx" },
+    );
+    const completedSegments = [...prior.summaries, segmentSummary];
+    const progress = aggregateEnduranceProgress(completedSegments);
+    const targetDurationSec = options.targetDurationSec ?? null;
+    const summary = {
+      schema_version: 2,
+      ok: prior.failed_segments.length === 0,
+      session_nonce: nonce,
+      model: options.model,
+      thinking: options.thinking,
+      modes: options.plan.modes,
+      target_duration_sec: targetDurationSec,
+      target_met:
+        targetDurationSec === null
+          ? null
+          : prior.failed_segments.length === 0 && progress.active_elapsed_sec >= targetDurationSec,
+      current_segment: segment,
+      segment_elapsed_sec: elapsedSec,
+      segments_completed: progress.segments_completed,
+      failed_segments: prior.failed_segments,
+      rounds_completed: progress.rounds_completed,
+      total_cases: progress.total_cases,
+      active_elapsed_sec: progress.active_elapsed_sec,
+      last_round: progress.last_round,
+      run_delay_sec: options.plan.runDelaySec,
+      restart_every: options.plan.restartEvery,
+      rebind_every: options.plan.rebindEvery,
+      settlement_crash_every: options.plan.settlementCrashEvery,
+      ssh_fault_every: options.plan.sshFaultEvery,
+      ssh_fault_sec: options.plan.sshFaultSec,
+      pi_api_module: piApiModule,
+      pi_ssh_tools_extension: piSshToolsExtension,
+      runwatch: segmentSummary.runwatch,
       evidence_dir: evidenceDir,
+      resume_command_requires_same_contract: true,
       preserved: true,
     };
     await writeFile(join(evidenceDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -1089,14 +1265,21 @@ export async function runSoak(options) {
     const failure = {
       schema_version: 1,
       ok: false,
-      model: options.model,
-      modes: options.plan.modes,
+      segment,
+      started_at: startedAtIso,
+      ended_at: new Date().toISOString(),
+      elapsed_sec: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
+      round_start: roundStart,
       rounds_completed: rounds.length,
       error: error instanceof Error ? error.stack || error.message : String(error),
       evidence_dir: evidenceDir,
       preserved: true,
     };
-    await writeFile(join(evidenceDir, "failure.json"), `${JSON.stringify(failure, null, 2)}\n`, "utf8");
+    await writeFile(
+      join(segmentDir, "failure.json"),
+      `${JSON.stringify(failure, null, 2)}\n`,
+      { encoding: "utf8", flag: "wx" },
+    );
     throw error;
   } finally {
     terminateTree(supervisor);
@@ -1118,10 +1301,14 @@ function usage() {
     "Focused settlement-crash qualification:",
     "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --modes local-process --rounds 1 --run-delay-sec 45 --restart-every 0 --rebind-every 0 --settlement-crash-every 1",
     "",
-    "Duration soak:",
-    "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --host <ssh-alias> --workdir </shared/workspace> --duration-sec 7200 --run-delay-sec 30 --rebind-every 5 --settlement-crash-every 7 --ssh-fault-every 3 --ssh-fault-sec 8",
+    "One-process duration soak:",
+    "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --host <ssh-alias> --workdir </shared/workspace> --duration-sec 7200 --target-duration-sec 7200 --run-delay-sec 30 --rebind-every 5 --settlement-crash-every 7 --ssh-fault-every 3 --ssh-fault-sec 8",
     "",
-    "The same packaged supervisor/SQLite/IPC runtime is reused across all rounds. Active-run restarts kill only the isolated serve child. Rebind rounds use Pi's exported SessionManager API to make a real sibling branch in the same persisted session, require needs_rebind with zero completion injection, then explicitly rebind the same Delivery. Settlement-crash rounds kill serve only after one completion is persisted and before the settlement receipt, then require orphan recovery without duplicating completion. SSH-fault rounds route only runwatch's SSH transport through an evidence-local localhost relay, require an unreachable/probe_error Observation after cut, then require a fresh Observation on the same scheduler job after restore. Evidence is preserved under acceptance-output/.",
+    "Resumable endurance session:",
+    "  first segment: add --target-duration-sec 7200 and a bounded --duration-sec <segment-seconds>",
+    "  later segments: repeat the frozen model/host/workdir/fault arguments and add --resume-evidence-dir <existing-soak-dir>",
+    "",
+    "A resumable session freezes runwatch, the active pi-runs runtime/acceptance tree, Pi API, pi-ssh-tools code, model, workspace and fault cadence in endurance-session.json. Each invocation reuses the same runwatch data directory, IPC endpoint and monotonically increasing round numbers, but writes a new immutable segment-NNNN checkpoint. Segment-boundary supervisor restart is explicit additional fault coverage; only clean successful segment active time accumulates toward --target-duration-sec. A failed, interrupted/incomplete, ambiguous or missing prior segment makes the session non-resumable and is a release-blocking failure; after diagnosis, start a new endurance session rather than washing the failure out with later time. Active-run restarts kill only the isolated serve child. Rebind rounds use Pi's exported SessionManager API to make a real sibling branch in the same persisted session, require needs_rebind with zero completion injection, then explicitly rebind the same Delivery. Settlement-crash rounds kill serve only after one completion is persisted and before the settlement receipt, then require orphan recovery without duplicating completion. SSH-fault rounds route only runwatch's SSH transport through an evidence-local localhost relay, require an unreachable/probe_error Observation after cut, then require a fresh Observation on the same scheduler job after restore. Evidence is preserved under acceptance-output/.",
   ].join("\n");
 }
 

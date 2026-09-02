@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { dirname, join, resolve } from "node:path";
 
 import {
+  aggregateEnduranceProgress,
+  assertEnduranceContract,
+  assertResumableEnduranceState,
   buildSoakPlan,
   deliverySessionCounts,
   isDurablySubmittedRun,
@@ -58,6 +61,7 @@ test("duration mode is bounded and restart injection can be disabled", () => {
     restartEvery: 0,
   });
   assert.equal(plan.durationSec, 7200);
+  assert.equal(plan.targetDurationSec, undefined);
   assert.equal(plan.restartEvery, 0);
   assert.equal(plan.rebindEvery, 0);
   assert.equal(plan.settlementCrashEvery, 0);
@@ -65,6 +69,71 @@ test("duration mode is bounded and restart injection can be disabled", () => {
     () => buildSoakPlan({ modes: "slurm", rounds: 1, durationSec: 20, host: "hpc.example", workdir: "/shared/workspace" }),
     /duration-sec/,
   );
+});
+
+test("endurance target is bounded independently from per-segment duration", () => {
+  const plan = buildSoakPlan({
+    modes: process.platform === "win32" ? "local-process" : "slurm",
+    rounds: 1,
+    durationSec: 120,
+    targetDurationSec: 7200,
+    host: "hpc.example",
+    workdir: "/shared/workspace",
+  });
+  assert.equal(plan.durationSec, 120);
+  assert.equal(plan.targetDurationSec, 7200);
+  assert.throws(
+    () => buildSoakPlan({ modes: "slurm", rounds: 1, targetDurationSec: 30, host: "hpc.example", workdir: "/shared/workspace" }),
+    /target-duration-sec/,
+  );
+});
+
+test("resumable endurance progress accumulates immutable successful segments", () => {
+  const progress = aggregateEnduranceProgress([
+    { segment: 2, elapsed_sec: 61.25, rounds_completed: 2, total_cases: 4, round_end: 4 },
+    { segment: 1, elapsed_sec: 60.5, rounds_completed: 2, total_cases: 4, round_end: 2 },
+  ]);
+  assert.deepEqual(progress, {
+    segments_completed: 2,
+    rounds_completed: 4,
+    total_cases: 8,
+    active_elapsed_sec: 121.75,
+    last_round: 4,
+  });
+});
+
+test("resume contract rejects a changed package/model/fault contract", () => {
+  const frozen = {
+    model: "provider/model",
+    plan: { restart_every: 1 },
+    artifacts: { runwatch_sha256: "abc" },
+  };
+  assert.doesNotThrow(() => assertEnduranceContract(frozen, structuredClone(frozen)));
+  assert.throws(
+    () => assertEnduranceContract(frozen, { ...structuredClone(frozen), model: "provider/other" }),
+    /resume invocation|frozen endurance contract/i,
+  );
+});
+
+test("resumable endurance fails closed on failed, incomplete, ambiguous, or missing prior segments", () => {
+  const clean = {
+    failed_segments: [],
+    incomplete_segments: [],
+    ambiguous_segments: [],
+    missing_segments: [],
+  };
+  assert.doesNotThrow(() => assertResumableEnduranceState(clean));
+  for (const [field, values] of [
+    ["failed_segments", [1]],
+    ["incomplete_segments", [2]],
+    ["ambiguous_segments", [3]],
+    ["missing_segments", [4]],
+  ]) {
+    assert.throws(
+      () => assertResumableEnduranceState({ ...clean, [field]: values }),
+      /not resumable|prior segment|new endurance session/i,
+    );
+  }
 });
 
 test("fault cadence is bounded and can schedule rebind plus settlement crash", () => {

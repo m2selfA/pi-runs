@@ -93,6 +93,7 @@ Already qualified:
 - explicit real-Pi live failure regression: completion remains durable, no false settlement is written, and Delivery is retried rather than acked delivered;
 - current-HEAD packaged repeat qualification: 456.473 s, 2 rounds / 4 real cases, concurrent Local + Slurm, two resident serve restarts, two real same-session rebind recoveries, Slurm Job <job-id>, and exactly-once final continuation evidence. This increases repetition evidence but is intentionally not counted as the multi-hour gate.
 - focused packaged Slurm-only rebind qualification on Job <job-id> after explicit `pi-ssh-tools` extension resolution: zero wrong-branch completion/settlement, exactly one `runs_rebind`, Delivery attempt 2 final success, and exact `runs_status/runs_logs/ssh_activate/ssh_read` result inspection.
+- resumable-endurance contract qualification: two real Local Process segments reused one nonce/SQLite/IPC authority with rounds 1 -> 2 and accumulated 193.195 s of clean active time; a changed-cadence resume failed before creating segment 3. Formal resumed evidence freezes runwatch plus Pi/pi-runs/pi-ssh-tools code hashes and permanently rejects failed/incomplete/ambiguous/missing segment history.
 
 Still blocking a v1 tag:
 
