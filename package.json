@@ -19,7 +19,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "accept:release": "node scripts/acceptance/pi_v1_release.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

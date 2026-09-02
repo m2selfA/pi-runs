@@ -32,6 +32,28 @@ test("remote submit spec carries workspace and scheduler resources without pi-ss
   assert.equal(spec.continuation.origin_leaf_id, "leaf-1");
 });
 
+test("remote submit spec drops model-generated neutral optional resource defaults", () => {
+  const spec = buildSubmitSpec({
+    run_id: "pi_call_neutral",
+    name: "",
+    host: "hpc.example",
+    workdir: "/tmp",
+    runner: "slurm",
+    command: "python3 run.py",
+    time: " 00:02:00 ",
+    partition: "",
+    queue: "  ",
+    account: "",
+    cpus: 1,
+    mem: "",
+    gpus: 0,
+    wakeup: "auto",
+    webhook_url: "",
+  });
+  assert.equal(spec.name, undefined);
+  assert.deepEqual(spec.resources, { time: "00:02:00", cpus: 1 });
+});
+
 test("local Process submit spec uses local workspace and no scheduler resources", () => {
   const spec = buildSubmitSpec({
     run_id: "pi_local_1",

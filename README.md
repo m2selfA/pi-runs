@@ -38,6 +38,17 @@ pi install /path/to/pi-runs
 | `runs_cancel` | durable scancel / bkill request through runwatch; legacy Stop-Job only under explicit legacy mode |
 | `runs_rebind` | explicitly attach a branch-blocked completion to the current Pi session branch |
 
+## Pi v1 release acceptance
+
+The formal release gate is explicit opt-in and always uses a real Pi provider plus an explicit packaged `runwatch` executable. It creates unique isolated runwatch/Pi state under ignored `acceptance-output/`, stops spawned test processes in `finally`, and preserves the evidence directory for review instead of recursively deleting it.
+
+```text
+npm run accept:release -- --confirm-real-provider --mode local-process --runwatch-exe <path-to-packaged-runwatch> --model <provider/model>
+npm run accept:release -- --confirm-real-provider --mode slurm --runwatch-exe <path-to-packaged-runwatch> --model <provider/model> --host <ssh-alias> --workdir </shared/persistent/workspace>
+```
+
+The Slurm/LSF workdir must be the same persistent shared filesystem on login and compute nodes. A successful gate requires one initial `runs_doctor`, one `runs_submit`, full initiating-Pi exit, one durable terminal Delivery/AgentInvocation, one persisted `runwatch/completion`, one settlement receipt, result inspection in the exact resumed Pi session, and no resubmission.
+
 ## Pi status
 
 While an interactive Pi session is active, pi-runs publishes a compact composable status entry such as:
@@ -59,6 +70,8 @@ The extension uses its own `pi-runs` status key rather than replacing Pi's foote
 `runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or silently selects legacy. A production-ready Pi v1 environment reports `selected_backend=runwatch`; explicit `legacy` is always reported as migration-only and not v1-ready.
 
 Production durable execution now includes **Windows Local × Process** as well as remote Slurm/LSF. Local `runs_submit` with no host and `runner=auto|process` is normalized to runwatch `Process`; the old PowerShell `Start-Job` runner remains explicit legacy compatibility only. Local Process is deliberately fail-closed if the Windows host Job Object does not permit process breakaway, because launching a child that dies with runwatchd would violate the durability contract.
+
+For remote Slurm/LSF, `workdir` is a **shared durable workspace contract**, not merely a directory that exists on the SSH login host. The path must resolve to the same persistent filesystem from the login node and scheduler compute nodes so runwatch can observe its wrapper sentinel/logs and Pi can inspect scientific outputs after continuation. Node-local paths such as `/tmp` are unsupported unless that cluster explicitly provides them as shared storage.
 
 ## Live continuation
 

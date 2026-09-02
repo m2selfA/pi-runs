@@ -399,7 +399,7 @@ export default function (pi: ExtensionAPI) {
       name: Type.Optional(Type.String()),
       runner: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("process"), Type.Literal("slurm"), Type.Literal("lsf"), Type.Literal("powershell")])),
       wakeup: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("poll"), Type.Literal("sidecar"), Type.Literal("systemd-user"), Type.Literal("powershell-event"), Type.Literal("webhook")])),
-      workdir: Type.Optional(Type.String({ description: "Working directory. Local Process defaults to the current Pi cwd; with host set this must be the absolute remote POSIX workspace path." })),
+      workdir: Type.Optional(Type.String({ description: "Working directory. Local Process defaults to the current Pi cwd. For remote Slurm/LSF this must be an absolute persistent workspace path shared at the same path by the SSH login node and scheduler compute nodes; node-local /tmp/scratch is unsupported unless the cluster makes it shared." })),
       time: Type.Optional(Type.String({ description: "Walltime, e.g. 04:00:00 or LSF -W value" })),
       partition: Type.Optional(Type.String()),
       queue: Type.Optional(Type.String()),
@@ -413,6 +413,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use runs_submit for long scientific computation instead of manually polling sbatch/bsub jobs.",
       "For remote Slurm/LSF work prepared with pi-ssh-tools, pass the ssh_status Host alias as host and its remote cwd as workdir; do not submit with ssh_bash and register afterwards.",
+      "For remote scheduler Runs, choose a persistent shared workdir visible at the same path from login and compute nodes; never default to node-local /tmp or scratch merely because it exists on the SSH host.",
       "For long local Windows computation, omit host and use runner=process (or leave runner=auto); pi-runs defaults workdir to the current Pi cwd and runwatch owns the detached process lifecycle.",
       "After durable continuation is armed, stop actively waiting; runs_wait is only for short synchronous waits.",
     ],

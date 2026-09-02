@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import net from "node:net";
@@ -56,7 +56,8 @@ test(
   async () => {
     const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const endpoint = endpointFor(nonce);
-    const sessionDir = await mkdtemp(join(tmpdir(), "pi-runs-live-session-"));
+    const sessionDir = resolve("acceptance-output", `live-bridge-${nonce}`, "pi-sessions");
+    await mkdir(sessionDir, { recursive: true });
     const extension = resolve("extensions/runs/index.ts");
     const state = {
       registration: undefined,
@@ -245,7 +246,8 @@ test(
       ]);
       terminateTree(child);
       await new Promise((resolvePromise) => server.close(resolvePromise));
-      await rm(sessionDir, { recursive: true, force: true });
+      // Preserve the unique ignored acceptance-output directory for post-run evidence.
+      // Repository acceptance paths never recursively delete user-visible evidence.
     }
   },
 );

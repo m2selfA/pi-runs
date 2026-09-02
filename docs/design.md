@@ -69,6 +69,8 @@ RemoteWorkspaceRef {
 
 它可直接转换为 `pi-ssh-tools` 的 `host:/remote/path`。SSH activation **不持久恢复**：自动 continuation 后模型必须显式调用 `ssh_activate`，避免把本地/远端执行环境悄悄混淆。
 
+对于 `runner=slurm|lsf`，`cwd` 还有一个不可省略的 durable invariant：它必须是登录节点与 scheduler compute node **共同可见、路径一致、可持久读写**的 workspace。runwatch 在该路径下写 `.runwatch/<run_id>/attempt-*.sh`、stdout/stderr、terminal sentinel 和 receipt；任务本身及 continuation 后的 Pi 也以同一个路径解释科学输出。登录节点本地 `/tmp`、计算节点 local scratch 等只有在集群明确保证跨节点共享时才能使用，否则 scheduler 可以成功退出而登录节点无法看到 sentinel/结果。pi-runs 不尝试猜测文件系统拓扑，因此这项约束由调用方/集群配置显式满足。
+
 ## Pi RunSpec
 
 Pi 侧提交对象面向科研意图，而不是暴露 runwatch 内部表：

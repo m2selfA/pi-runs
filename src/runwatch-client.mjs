@@ -114,6 +114,29 @@ export async function clientInfo(options = {}) {
   }
 }
 
+function optionalResourceText(value) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function optionalResourceCount(value) {
+  return value === 0 ? undefined : value;
+}
+
+function buildSchedulerResources(req) {
+  const resources = {};
+  for (const key of ["time", "partition", "queue", "account", "mem"]) {
+    const value = optionalResourceText(req?.[key]);
+    if (value !== undefined) resources[key] = value;
+  }
+  for (const key of ["cpus", "gpus"]) {
+    const value = optionalResourceCount(req?.[key]);
+    if (value !== undefined) resources[key] = value;
+  }
+  return resources;
+}
+
 export function buildSubmitSpec(req) {
   const runner = String(req?.runner || "").toLowerCase();
   if (!req?.run_id) throw new Error("runwatch submit requires stable run_id");
@@ -125,7 +148,7 @@ export function buildSubmitSpec(req) {
     }
     return {
       run_id: req.run_id,
-      name: req.name,
+      name: optionalResourceText(req.name),
       workspace: {
         host_alias: "local",
         cwd: req.workdir,
@@ -143,22 +166,14 @@ export function buildSubmitSpec(req) {
   }
   return {
     run_id: req.run_id,
-    name: req.name,
+    name: optionalResourceText(req.name),
     workspace: {
       host_alias: req.host,
       cwd: req.workdir,
     },
     runner,
     command: req.command,
-    resources: {
-      time: req.time,
-      partition: req.partition,
-      queue: req.queue,
-      account: req.account,
-      cpus: req.cpus,
-      mem: req.mem,
-      gpus: req.gpus,
-    },
+    resources: buildSchedulerResources(req),
     continuation: req._continuation,
   };
 }
