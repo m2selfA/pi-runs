@@ -85,13 +85,13 @@ Already qualified:
 - real provider Windows Local Process exact-session continuation;
 - real provider hpc.example Slurm exact-session continuation on shared storage;
 - exactly-once Delivery/AgentInvocation/session settlement;
-- mixed Local + Slurm resident serve-restart qualification.
+- mixed Local + Slurm resident serve-restart qualification;
+- Windows resident upgrade/uninstall lifecycle: Task Scheduler `/End` plus verified supervisor-only termination released supervisor/serve ownership without process-tree cancellation; runwatch refuses unregister while an independent owner remains.
 
 Still blocking a v1 tag:
 
 - a true endurance run, not merely a short qualification, with prolonged concurrent workloads and resident daemon restart;
 - transient SSH-loss/recovery during remote work;
 - prolonged branch-divergence/rebind and completion/settlement crash-window coverage;
-- final runwatch resident upgrade/uninstall lifecycle gate.
 
 No formal gate may require a human `continue` message.
