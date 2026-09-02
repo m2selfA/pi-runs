@@ -49,6 +49,8 @@ npm run accept:release -- --confirm-real-provider --mode slurm --runwatch-exe <p
 
 The Slurm/LSF workdir must be the same persistent shared filesystem on login and compute nodes. A successful gate requires one initial `runs_doctor`, one `runs_submit`, full initiating-Pi exit, one durable terminal Delivery/AgentInvocation, one persisted `runwatch/completion`, one settlement receipt, result inspection in the exact resumed Pi session, and no resubmission.
 
+For resident fault/endurance qualification, use the same real-provider contract through `npm run accept:soak`. The soak driver keeps one packaged supervisor/SQLite/IPC runtime across rounds, runs Local Process and Slurm workloads concurrently by default, and injects a serve-child restart only after every initiating Pi has successfully armed continuation, exited, and every Run has a persisted execution handle. A true release endurance run uses `--duration-sec`; short `--rounds` runs are qualification only.
+
 ## Pi status
 
 While an interactive Pi session is active, pi-runs publishes a compact composable status entry such as:

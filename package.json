@@ -20,7 +20,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "accept:release": "node scripts/acceptance/pi_v1_release.mjs"
+    "accept:release": "node scripts/acceptance/pi_v1_release.mjs",
+    "accept:soak": "node scripts/acceptance/pi_v1_soak.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

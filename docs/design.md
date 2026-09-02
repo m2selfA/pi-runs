@@ -56,6 +56,8 @@ pi-runs 不 import `pi-ssh-tools`，也不要求它存在；只在工具可用�
 
 安装边界保持简单：runwatch 的 portable release 独立提供 `runwatch/runwatch-mcp/runwatch-gui`，pi-runs 作为 Pi package 单独安装并通过 local IPC 使用 resident `runwatchd`。pi-runs 不复制 runwatch binary、不管理第二个 daemon，也不因为 readiness 失败回退到旧 ledger。
 
+Release endurance 也复用同一 authority，而不是再造测试 daemon。`pi_v1_soak.mjs` 在一个 packaged supervisor / SQLite / local IPC 生命周期里反复运行真实 Pi/provider workload；fault injection 的合法边界是 initiating Pi 已成功得到 `continuation=armed` 并退出、且每个 Run 已持久化非 `submitting` 状态与 execution handle 之后。之后可以杀 isolated `serve` 验证 supervisor replacement，而 scheduler/local scientific workload继续独立执行。每条 completion 仍必须满足与 R8b 相同的 exact-session、exactly-once Delivery/Invocation/settlement 和显式 workspace result verification；短轮次只做 qualification，multi-hour duration 才能关闭 endurance gate。
+
 ## RemoteWorkspaceRef
 
 三项目共享的最小语义对象：

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 
 import {
   buildAcceptanceSpec,
@@ -63,6 +64,11 @@ function slurmSpec() {
 }
 
 test("release prompt freezes initial handoff and future verification contract", () => {
+  const isolated = buildAcceptanceSpec(
+    { mode: "local-process", evidenceDir: resolve("acceptance-output", "unit-local") },
+    "isolated-workdir",
+  );
+  assert.equal(isolated.submitArgs.workdir, resolve("acceptance-output", "unit-local"));
   const spec = localSpec();
   const prompt = buildSeedPrompt(spec);
   assert.equal(prompt.includes("\n"), false, "Windows Volta/Pi launch requires a single-line acceptance prompt");
@@ -75,6 +81,18 @@ test("release prompt freezes initial handoff and future verification contract", 
 });
 
 test("Slurm seed prompt avoids Windows shell metacharacters while preserving the remote token write", () => {
+  const delayed = buildAcceptanceSpec(
+    {
+      mode: "slurm",
+      host: "hpc.example",
+      workdir: "/shared/workspace",
+      evidenceDir: process.cwd(),
+      delaySec: 9,
+    },
+    "delay-test",
+  );
+  assert.equal(delayed.delaySec, 9);
+  assert.match(delayed.submitArgs.command, /^sleep 9; /);
   const spec = slurmSpec();
   const prompt = buildSeedPrompt(spec);
   assert.doesNotMatch(spec.submitArgs.command, /[>|&<^]/);

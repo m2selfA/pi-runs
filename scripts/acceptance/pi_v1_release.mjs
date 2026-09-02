@@ -55,6 +55,10 @@ export function buildAcceptanceSpec(options, nonce) {
     "_",
   );
   const token = `R8B_TOKEN_${nonce}`.replace(/[^A-Za-z0-9_.-]/g, "_");
+  const delaySec = Number(options.delaySec ?? 2);
+  if (!Number.isInteger(delaySec) || delaySec < 1 || delaySec > 600) {
+    throw new Error("acceptance delaySec must be an integer between 1 and 600");
+  }
   if (runId.length > 96) throw new Error(`generated run_id is too long: ${runId}`);
 
   if (mode === "slurm") {
@@ -67,12 +71,13 @@ export function buildAcceptanceSpec(options, nonce) {
     const markerProgram = `from pathlib import Path; Path(${JSON.stringify(markerName)}).write_text(${JSON.stringify(token)}, encoding="utf-8")`;
     // Keep the seed prompt safe across Windows Volta/Pi argv reconstruction: avoid cmd.exe
     // metacharacters such as > | & < ^ in the remote command text embedded inside -p.
-    const command = `sleep 2; python3 -c ${quotePosixLiteral(markerProgram)}`;
+    const command = `sleep ${delaySec}; python3 -c ${quotePosixLiteral(markerProgram)}`;
     return {
       mode,
       runId,
       token,
       markerName,
+      delaySec,
       markerPath: `${String(options.workdir).replace(/\/$/, "")}/${markerName}`,
       submitArgs: {
         run_id: runId,
@@ -96,11 +101,11 @@ export function buildAcceptanceSpec(options, nonce) {
   if (process.platform !== "win32") {
     throw new Error("local-process release acceptance is currently Windows-only");
   }
-  const workdir = options.workdir ? resolve(options.workdir) : process.cwd();
+  const workdir = options.workdir ? resolve(options.workdir) : resolve(options.evidenceDir);
   if (!isAbsolute(workdir)) throw new Error("local-process workdir must be absolute");
   const markerPath = resolve(options.evidenceDir, `local-marker-${nonce}.txt`);
   const command = [
-    "Start-Sleep -Seconds 2",
+    `Start-Sleep -Seconds ${delaySec}`,
     `[IO.File]::WriteAllText(${quotePowerShellLiteral(markerPath)}, ${quotePowerShellLiteral(token)}, [Text.UTF8Encoding]::new($false))`,
   ].join("; ");
   return {
@@ -108,6 +113,7 @@ export function buildAcceptanceSpec(options, nonce) {
     runId,
     token,
     markerName: basename(markerPath),
+    delaySec,
     markerPath,
     submitArgs: {
       run_id: runId,
@@ -339,7 +345,7 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
   };
 }
 
-function readJsonLines(path) {
+export function readJsonLines(path) {
   const metadata = statSync(path);
   if (metadata.size > MAX_EVIDENCE_FILE_BYTES) {
     throw new Error(`evidence file exceeds ${MAX_EVIDENCE_FILE_BYTES} bytes: ${path}`);
@@ -357,7 +363,7 @@ function readJsonLines(path) {
     });
 }
 
-function readDatabaseEvidence(dbPath, runId) {
+export function readDatabaseEvidence(dbPath, runId) {
   if (!existsSync(dbPath)) return null;
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
@@ -399,7 +405,7 @@ function readDatabaseEvidence(dbPath, runId) {
   }
 }
 
-async function waitFor(check, timeoutMs, label, intervalMs = 250) {
+export async function waitFor(check, timeoutMs, label, intervalMs = 250) {
   const started = Date.now();
   let lastError;
   while (Date.now() - started < timeoutMs) {
@@ -436,7 +442,7 @@ export async function waitForExit(
   }
 }
 
-function terminateTree(child) {
+export function terminateTree(child) {
   if (!child?.pid || child.exitCode !== null) return;
   if (process.platform === "win32") {
     spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
@@ -452,7 +458,7 @@ function terminateTree(child) {
   }
 }
 
-function openProcessLogs(evidenceDir, prefix) {
+export function openProcessLogs(evidenceDir, prefix) {
   const stdoutPath = join(evidenceDir, `${prefix}.stdout.log`);
   const stderrPath = join(evidenceDir, `${prefix}.stderr.log`);
   return {
@@ -463,7 +469,7 @@ function openProcessLogs(evidenceDir, prefix) {
   };
 }
 
-function closeProcessLogs(logs) {
+export function closeProcessLogs(logs) {
   for (const fd of [logs?.stdoutFd, logs?.stderrFd]) {
     if (typeof fd !== "number") continue;
     try {
@@ -531,7 +537,7 @@ function parseArgs(argv) {
   return result;
 }
 
-function preflightPiSshTools(options) {
+export function preflightPiSshTools(options) {
   if (options.mode !== "slurm") return;
   const launch = piCommand(["list"], options.piExecutable);
   const probe = spawnSync(launch.executable, launch.args, {
