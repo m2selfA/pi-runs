@@ -1,0 +1,6 @@
+[Path]
+PathExists=%h/.pi/runs/%i/terminal
+Unit=pi-runs-wake@%i.service
+
+[Install]
+WantedBy=default.target

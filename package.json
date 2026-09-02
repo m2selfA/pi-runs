@@ -1,0 +1,33 @@
+{
+  "name": "pi-runs",
+  "version": "0.1.0",
+  "description": "Pi integration for durable long-running scientific Runs managed by runwatch.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "hpc",
+    "slurm",
+    "lsf",
+    "powershell",
+    "scientific-computing"
+  ],
+  "bin": {
+    "pi-runs-wake": "./bin/pi-runs-wake.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions/runs/index.ts"],
+    "skills": ["./skills"]
+  }
+}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img" aria-label="pi-runs">
+  <rect width="720" height="160" fill="#0B1220"/>
+  <circle cx="80" cy="80" r="36" fill="none" stroke="#2EE6C5" stroke-width="6"/>
+  <circle cx="56" cy="80" r="3" fill="#2EE6C5"/>
+  <circle cx="104" cy="56" r="3" fill="#2EE6C5"/>
+  <path d="M108 100l8 8 14-16" fill="none" stroke="#F5B942" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="80" y="92" text-anchor="middle" font-family="Georgia, serif" font-size="34" fill="#8B93A7">π</text>
+  <text x="140" y="92" font-family="Inter, Segoe UI, Helvetica, sans-serif" font-size="52" font-weight="600" fill="#F7F8FA">pi-runs</text>
+  <text x="144" y="122" font-family="Inter, Segoe UI, Helvetica, sans-serif" font-size="16" fill="#8B93A7">submit · wait · harvest</text>
+</svg>

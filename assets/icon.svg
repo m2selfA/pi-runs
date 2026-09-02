@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="pi-runs">
+  <rect width="256" height="256" rx="56" fill="#0B1220"/>
+  <path d="M64 128a64 64 0 1 0 64-64" fill="none" stroke="#2EE6C5" stroke-width="14" stroke-linecap="round"/>
+  <path d="M176 84l18 0 0 18" fill="none" stroke="#F5B942" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" transform="rotate(45 185 93)"/>
+  <text x="128" y="148" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="72" fill="#F4EFE6">π</text>
+</svg>
