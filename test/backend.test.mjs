@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  PI_V1_REQUIRED_CAPABILITIES,
+  assessPiV1Readiness,
   backendInfo,
+  doctorInfo,
   normalizeSubmitRequest,
   requestedBackend,
   submitCapability,
@@ -74,6 +77,50 @@ test("auto rejects a capability gap instead of selecting legacy", async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("Pi v1 readiness requires runwatch authority, identity, and the full capability contract", () => {
+  const healthy = {
+    available: true,
+    transport: "local-ipc",
+    endpoint: "test-endpoint",
+    protocol_version: 1,
+    service: "runwatchd",
+    storage: "sqlite-wal",
+    capabilities: [...PI_V1_REQUIRED_CAPABILITIES],
+  };
+  const ready = assessPiV1Readiness(healthy, "auto");
+  assert.equal(ready.ready, true);
+  assert.equal(ready.selected_backend, "runwatch");
+  assert.deepEqual(ready.missing_capabilities, []);
+  assert.deepEqual(ready.reasons, []);
+
+  const gap = assessPiV1Readiness(
+    { ...healthy, capabilities: healthy.capabilities.filter((cap) => cap !== "offline_pi_continuation") },
+    "runwatch",
+  );
+  assert.equal(gap.ready, false);
+  assert.deepEqual(gap.missing_capabilities, ["offline_pi_continuation"]);
+  assert.match(gap.reasons.join(" "), /missing Pi v1 capabilities/);
+
+  const impostor = assessPiV1Readiness({ ...healthy, service: "other-service" }, "auto");
+  assert.equal(impostor.ready, false);
+  assert.equal(impostor.selected_backend, null);
+  assert.match(impostor.reasons.join(" "), /unexpected runwatch service identity/);
+
+  const legacy = assessPiV1Readiness(healthy, "legacy");
+  assert.equal(legacy.ready, false);
+  assert.equal(legacy.selected_backend, "legacy");
+  assert.match(legacy.reasons.join(" "), /migration backend/);
+});
+
+test("doctor reports an unavailable daemon without silently falling back to legacy", async () => {
+  const report = await doctorInfo({ env: env("auto"), timeout_ms: 100 });
+  assert.equal(report.ready, false);
+  assert.equal(report.requested_backend, "auto");
+  assert.equal(report.selected_backend, null);
+  assert.equal(report.runwatch.available, false);
+  assert.match(report.reasons.join(" "), /runwatchd unavailable/);
 });
 
 test("remote Slurm/LSF submission selects v2 capability only with explicit workspace", () => {

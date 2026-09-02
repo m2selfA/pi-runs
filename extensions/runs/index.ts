@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import {
   backendInfo,
+  doctorInfo,
   normalizeSubmitRequest,
   submitCapability,
   submitRun,
@@ -370,6 +371,21 @@ export default function (pi: ExtensionAPI) {
       adapter_path: ADAPTER_PATH,
     };
   };
+
+  pi.registerTool({
+    name: "runs_doctor",
+    label: "Runwatch readiness",
+    description:
+      "Read-only Pi v1 readiness check for the runwatch durable backend. Reports protocol/service/storage identity, required capabilities, explicit legacy selection and actionable reasons without changing configuration.",
+    parameters: Type.Object({}),
+    promptSnippet: "Check whether the Pi durable-run backend is ready",
+    promptGuidelines: [
+      "Use runs_doctor when runwatch-backed tools are unavailable or before release/installation validation. It is diagnostic only and must not be treated as an installer.",
+    ],
+    async execute(_id, _params, signal) {
+      return jsonResult(await doctorInfo({ signal }));
+    },
+  });
 
   pi.registerTool({
     name: "runs_submit",

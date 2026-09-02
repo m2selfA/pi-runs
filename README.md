@@ -29,6 +29,7 @@ pi install /path/to/pi-runs
 
 | Tool | Role |
 |---|---|
+| `runs_doctor` | read-only Pi v1 readiness: runwatch protocol/service/storage/capabilities/backend selection |
 | `runs_submit` | durable hand-off; return `run_id` + execution status/handle |
 | `runs_wait` | short synchronous wait only |
 | `runs_status` | canonical runwatch snapshot; fails closed if the durable control plane is unavailable |
@@ -54,6 +55,8 @@ The extension uses its own `pi-runs` status key rather than replacing Pi's foote
 ## Backend safety
 
 `PI_RUNS_BACKEND=auto` and `PI_RUNS_BACKEND=runwatch` use the canonical runwatch control plane and fail closed when it is unavailable or lacks the requested capability. To inspect or operate the pre-runwatch local JSONL implementation, set `PI_RUNS_BACKEND=legacy` explicitly for migration work.
+
+`runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or silently selects legacy. A production-ready Pi v1 environment reports `selected_backend=runwatch`; explicit `legacy` is always reported as migration-only and not v1-ready.
 
 Production durable execution now includes **Windows Local × Process** as well as remote Slurm/LSF. Local `runs_submit` with no host and `runner=auto|process` is normalized to runwatch `Process`; the old PowerShell `Start-Job` runner remains explicit legacy compatibility only. Local Process is deliberately fail-closed if the Windows host Job Object does not permit process breakaway, because launching a child that dies with runwatchd would violate the durability contract.
 

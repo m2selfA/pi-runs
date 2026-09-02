@@ -350,11 +350,14 @@ Local Process routing/documentation regression at R3e closeout: `npm test` — *
 
 The functional Pi path is already proven. R8 turns that path into a repeatable product release and intentionally blocks new AgentAdapter work until closure.
 
-### R8a — installation/readiness surface — next
+### R8a — installation/readiness surface — completed 2026-09-02
 
-- [ ] Define the supported installation relationship between the Pi package and the runwatch release layout without copying runwatch binaries into pi-runs or creating a second daemon manager.
-- [ ] Make missing/incompatible runwatchd, unavailable capabilities, extension-load failure and backend selection diagnosable from the Pi-facing surface while remaining fail-closed.
-- [ ] Keep `PI_RUNS_BACKEND=legacy` an explicit migration escape hatch only; installation/readiness must never silently select it.
+- [x] Added read-only `runs_doctor`. Pi v1 readiness now verifies runwatch local IPC protocol v1, `service=runwatchd`, `storage=sqlite-wal`, and the complete capability set actually required by durable submit/status/wait/logs/artifacts/cancel plus live/offline Pi continuation, rebind and offline invocation ownership. Output is structured as `ready`, requested/selected backend, runwatch identity/capabilities, `missing_capabilities`, and actionable `reasons`.
+- [x] Readiness never mutates configuration or starts/stops runwatch. `PI_RUNS_BACKEND=auto|runwatch` succeeds only on the canonical runwatch authority; explicit `legacy` is reported as a migration backend and never as Pi v1-ready. Missing daemon, capability gaps and unexpected service identity all fail closed in regression coverage.
+- [x] The installation contract is now explicit in README/design: install the runwatch portable release and pi-runs Pi package separately; pi-runs connects through local IPC and neither copies runwatch binaries nor becomes a second daemon manager.
+- [x] Real cross-project packaged smoke passed against the R11a extracted Windows package: packaged `runwatch.exe serve` reached IPC-ready on an isolated data dir/named pipe; the current pi-runs `doctorInfo` returned `ready=true`, `selected_backend=runwatch`, protocol 1, `runwatchd`/`sqlite-wal`, and **0 missing capabilities**; the test daemon was stopped in `finally`. A default-endpoint probe with no resident daemon returned `ready=false`/ENOENT as intended.
+- [x] Pi itself still loads the modified extension: `volta.exe run pi --offline --no-extensions -e ./extensions/runs/index.ts --list-models` exited 0 after `runs_doctor` registration. No provider turn is required for this loader smoke.
+- [x] R8a final regression: `npm test` passed **39 tests / 0 failed / 1 skipped**; readiness coverage includes daemon unavailable, capability gap, unexpected service identity, explicit legacy, and healthy Pi v1 capability contract.
 
 ### R8b — repeatable real-Pi release acceptance
 

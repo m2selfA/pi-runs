@@ -50,6 +50,12 @@ pi-runs 不 import `pi-ssh-tools`，也不要求它存在；只在工具可用�
 
 后端选择同样遵守 single-authority：`PI_RUNS_BACKEND=auto` 只使用 runwatch，daemon 离线或缺少 capability 时 fail closed；旧 `~/.pi/runs`/runner/wakeup 只有显式 `PI_RUNS_BACKEND=legacy` 才能进入。
 
+### Pi v1 readiness
+
+`runs_doctor` 是 Pi-facing 的只读 readiness surface，不是安装器。它直接读取 runwatch local IPC `hello`，要求 protocol v1、`service=runwatchd`、`storage=sqlite-wal`，并核对 Pi v1 实际依赖的完整 capability 集：durable submit/status/wait/logs/artifacts/cancel、live session lease/delivery/rebind、offline invocation ownership 与 `offline_pi_continuation`。任何缺失都返回 `ready=false` 和明确原因；`PI_RUNS_BACKEND=legacy` 即使本地旧 backend 可用，也始终只标为 migration backend，不能成为 v1 readiness success。
+
+安装边界保持简单：runwatch 的 portable release 独立提供 `runwatch/runwatch-mcp/runwatch-gui`，pi-runs 作为 Pi package 单独安装并通过 local IPC 使用 resident `runwatchd`。pi-runs 不复制 runwatch binary、不管理第二个 daemon，也不因为 readiness 失败回退到旧 ledger。
+
 ## RemoteWorkspaceRef
 
 三项目共享的最小语义对象：

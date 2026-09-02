@@ -3,6 +3,25 @@ import * as runwatch from "./runwatch-client.mjs";
 
 const VALID_BACKENDS = new Set(["auto", "legacy", "runwatch"]);
 
+export const PI_V1_REQUIRED_CAPABILITIES = Object.freeze([
+  "hello",
+  "list_runs",
+  "get_run",
+  "submit_run_v2",
+  "wait_run",
+  "logs",
+  "artifacts",
+  "cancel_run",
+  "register_agent_session",
+  "release_agent_session",
+  "claim_deliveries",
+  "delivery_status",
+  "ack_delivery",
+  "rebind_continuation",
+  "verify_offline_invocation",
+  "offline_pi_continuation",
+]);
+
 export function requestedBackend(env = process.env) {
   const value = String(env.PI_RUNS_BACKEND || "auto").trim().toLowerCase();
   if (!VALID_BACKENDS.has(value)) {
@@ -49,6 +68,83 @@ export async function backendInfo(capability = "hello", env = process.env, optio
     `PI_RUNS_BACKEND=auto refuses implicit legacy fallback: ${reason}. ` +
       "Use PI_RUNS_BACKEND=legacy only as an explicit migration compatibility choice.",
   );
+}
+
+export function assessPiV1Readiness(runwatchInfo, requested = "auto") {
+  const capabilities = Array.isArray(runwatchInfo?.capabilities)
+    ? runwatchInfo.capabilities.filter((value) => typeof value === "string")
+    : [];
+  const capabilitySet = new Set(capabilities);
+  const missingCapabilities = PI_V1_REQUIRED_CAPABILITIES.filter(
+    (capability) => !capabilitySet.has(capability),
+  );
+  const reasons = [];
+
+  if (requested === "legacy") {
+    reasons.push(
+      "PI_RUNS_BACKEND=legacy explicitly selects the migration backend; Pi v1 production requires runwatch",
+    );
+  }
+  if (!runwatchInfo?.available) {
+    reasons.push(`runwatchd unavailable: ${runwatchInfo?.reason || "unknown local IPC failure"}`);
+  } else {
+    if (runwatchInfo.service !== "runwatchd") {
+      reasons.push(`unexpected runwatch service identity ${JSON.stringify(runwatchInfo.service)}`);
+    }
+    if (runwatchInfo.storage !== "sqlite-wal") {
+      reasons.push(`unexpected runwatch storage identity ${JSON.stringify(runwatchInfo.storage)}`);
+    }
+    if (missingCapabilities.length) {
+      reasons.push(`runwatchd is missing Pi v1 capabilities: ${missingCapabilities.join(", ")}`);
+    }
+  }
+
+  const ready =
+    requested !== "legacy" &&
+    Boolean(runwatchInfo?.available) &&
+    runwatchInfo.service === "runwatchd" &&
+    runwatchInfo.storage === "sqlite-wal" &&
+    missingCapabilities.length === 0;
+
+  return {
+    schema_version: 1,
+    ready,
+    requested_backend: requested,
+    selected_backend: requested === "legacy" ? "legacy" : ready ? "runwatch" : null,
+    runwatch: {
+      available: Boolean(runwatchInfo?.available),
+      transport: runwatchInfo?.transport || "local-ipc",
+      endpoint: runwatchInfo?.endpoint,
+      protocol_version: runwatchInfo?.protocol_version,
+      service: runwatchInfo?.service,
+      storage: runwatchInfo?.storage,
+      capabilities,
+      reason: runwatchInfo?.reason,
+    },
+    required_capabilities: [...PI_V1_REQUIRED_CAPABILITIES],
+    missing_capabilities: missingCapabilities,
+    reasons,
+  };
+}
+
+export async function doctorInfo(options = {}) {
+  const env = options.env ?? process.env;
+  let requested;
+  let configError;
+  try {
+    requested = requestedBackend(env);
+  } catch (err) {
+    requested = String(env.PI_RUNS_BACKEND || "auto").trim().toLowerCase();
+    configError = err instanceof Error ? err.message : String(err);
+  }
+  const runwatchInfo = await runwatch.clientInfo({ ...options, env });
+  const report = assessPiV1Readiness(runwatchInfo, requested);
+  if (configError) {
+    report.ready = false;
+    report.selected_backend = null;
+    report.reasons.unshift(configError);
+  }
+  return report;
 }
 
 export function normalizeSubmitRequest(req, cwd) {

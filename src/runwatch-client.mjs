@@ -74,30 +74,39 @@ export function request(op, payload = {}, options = {}) {
 }
 
 export async function clientInfo(options = {}) {
+  const target = options.endpoint || endpoint(options.env);
   try {
     const hello = await request("hello", {}, options);
     const protocolVersion = Number(hello?.protocol_version);
+    const capabilities = Array.isArray(hello?.capabilities)
+      ? hello.capabilities.filter((value) => typeof value === "string")
+      : [];
     if (protocolVersion !== CLIENT_PROTOCOL_VERSION) {
       return {
         available: false,
         transport: "local-ipc",
+        endpoint: target,
         protocol_version: protocolVersion,
+        service: hello?.service,
+        storage: hello?.storage,
         reason: `unsupported runwatch protocol ${protocolVersion}; expected ${CLIENT_PROTOCOL_VERSION}`,
-        capabilities: hello?.capabilities || [],
+        capabilities,
       };
     }
     return {
       available: true,
       transport: "local-ipc",
+      endpoint: target,
       protocol_version: protocolVersion,
       service: hello?.service,
       storage: hello?.storage,
-      capabilities: hello?.capabilities || [],
+      capabilities,
     };
   } catch (err) {
     return {
       available: false,
       transport: "local-ipc",
+      endpoint: target,
       protocol_version: CLIENT_PROTOCOL_VERSION,
       capabilities: [],
       reason: err instanceof Error ? err.message : String(err),
