@@ -9,6 +9,7 @@ import {
   inspectInitialEvents,
   inspectPersistedSession,
   piPackageRootFromListOutput,
+  slurmAcceptanceTime,
   waitForExit,
 } from "../scripts/acceptance/pi_v1_release.mjs";
 
@@ -108,6 +109,8 @@ test("Slurm seed prompt avoids Windows shell metacharacters while preserving the
     "delay-test",
   );
   assert.equal(delayed.delaySec, 9);
+  assert.equal(delayed.submitArgs.time, "00:02:09");
+  assert.equal(slurmAcceptanceTime(600), "00:12:00");
   assert.match(delayed.submitArgs.command, /^sleep 9; /);
   const spec = slurmSpec();
   const prompt = buildSeedPrompt(spec);

@@ -8,6 +8,7 @@ import {
   assertResumableEnduranceState,
   buildSoakPlan,
   deliverySessionCounts,
+  evaluateV1EnduranceQualification,
   isDurablySubmittedRun,
   parseModes,
   piApiModuleForShimPath,
@@ -43,6 +44,7 @@ test("soak plan requires a shared absolute Slurm workspace", () => {
   assert.deepEqual(plan.modes, ["slurm"]);
   assert.equal(plan.rounds, 2);
   assert.equal(plan.runDelaySec, 30);
+  assert.equal(plan.seedTimeoutSec, 180);
   assert.equal(plan.restartEvery, 1);
   assert.equal(plan.rebindEvery, 0);
   assert.equal(plan.settlementCrashEvery, 0);
@@ -77,14 +79,61 @@ test("endurance target is bounded independently from per-segment duration", () =
     rounds: 1,
     durationSec: 120,
     targetDurationSec: 7200,
+    restartEvery: 0,
     host: "hpc.example",
     workdir: "/shared/workspace",
   });
   assert.equal(plan.durationSec, 120);
   assert.equal(plan.targetDurationSec, 7200);
+  assert.equal(plan.seedTimeoutSec, 180);
   assert.throws(
     () => buildSoakPlan({ modes: "slurm", rounds: 1, targetDurationSec: 30, host: "hpc.example", workdir: "/shared/workspace" }),
     /target-duration-sec/,
+  );
+});
+
+test("formal fault endurance requires scientific delay to outlive the bounded seed turn", () => {
+  const modes = process.platform === "win32" ? "local-process,slurm" : "slurm";
+  assert.throws(
+    () => buildSoakPlan({
+      modes,
+      rounds: 1,
+      targetDurationSec: 7200,
+      runDelaySec: 60,
+      seedTimeoutSec: 480,
+      restartEvery: 1,
+      host: "hpc.example",
+      workdir: "/shared/workspace",
+      timeoutSec: 1200,
+    }),
+    /run-delay-sec.*seed-timeout-sec|formal endurance/i,
+  );
+  const plan = buildSoakPlan({
+    modes,
+    rounds: 1,
+    targetDurationSec: 7200,
+    runDelaySec: 600,
+    seedTimeoutSec: 480,
+    restartEvery: 1,
+    host: "hpc.example",
+    workdir: "/shared/workspace",
+    timeoutSec: 1200,
+  });
+  assert.equal(plan.runDelaySec, 600);
+  assert.equal(plan.seedTimeoutSec, 480);
+  assert.throws(
+    () => buildSoakPlan({
+      modes: "slurm",
+      rounds: 1,
+      targetDurationSec: 7200,
+      runDelaySec: 600,
+      seedTimeoutSec: 541,
+      restartEvery: 1,
+      host: "hpc.example",
+      workdir: "/shared/workspace",
+      timeoutSec: 1200,
+    }),
+    /seed-timeout-sec/,
   );
 });
 
@@ -113,6 +162,58 @@ test("resume contract rejects a changed package/model/fault contract", () => {
     () => assertEnduranceContract(frozen, { ...structuredClone(frozen), model: "provider/other" }),
     /resume invocation|frozen endurance contract/i,
   );
+});
+
+test("v1 endurance qualification requires multi-hour mixed repeated fault coverage", () => {
+  const segmentSummaries = [1, 2].map((segment) => ({
+    segment,
+    elapsed_sec: 3600,
+    rounds_completed: 1,
+    total_cases: 2,
+    round_end: segment,
+    rounds: [
+      {
+        round: segment,
+        restart: { old_pid: segment, new_pid: segment + 10 },
+        ssh_fault: { recovered: true },
+        cases: [
+          { mode: "local-process", rebind_fault: { rebound: true }, settlement_crash_fault: null },
+          { mode: "slurm", rebind_fault: null, settlement_crash_fault: { recovered: true } },
+        ],
+      },
+    ],
+  }));
+  const progress = aggregateEnduranceProgress(segmentSummaries);
+  const qualified = evaluateV1EnduranceQualification({
+    targetDurationSec: 7200,
+    progress,
+    segmentSummaries,
+    dirtySegments: [],
+  });
+  assert.equal(qualified.qualified, true);
+  assert.deepEqual(qualified.reasons, []);
+  assert.equal(qualified.coverage.serve_restarts, 2);
+  assert.equal(qualified.coverage.ssh_loss_recoveries, 2);
+  assert.equal(qualified.coverage.rebind_recoveries, 2);
+  assert.equal(qualified.coverage.settlement_crash_recoveries, 2);
+
+  const tooShort = evaluateV1EnduranceQualification({
+    targetDurationSec: 600,
+    progress,
+    segmentSummaries,
+    dirtySegments: [],
+  });
+  assert.equal(tooShort.qualified, false);
+  assert.ok(tooShort.reasons.includes("target_duration_at_least_7200"));
+
+  const dirty = evaluateV1EnduranceQualification({
+    targetDurationSec: 7200,
+    progress,
+    segmentSummaries,
+    dirtySegments: ["failed:3"],
+  });
+  assert.equal(dirty.qualified, false);
+  assert.ok(dirty.reasons.includes("no_dirty_segments"));
 });
 
 test("resumable endurance fails closed on failed, incomplete, ambiguous, or missing prior segments", () => {

@@ -29,6 +29,9 @@ import { prepareRunwatchSshFaultProfile } from "./ssh_fault_relay.mjs";
 
 const DEFAULT_TIMEOUT_SEC = 600;
 const DEFAULT_RUN_DELAY_SEC = 60;
+const DEFAULT_SEED_TIMEOUT_SEC = 180;
+const FORMAL_ENDURANCE_MIN_TARGET_SEC = 7200;
+const FORMAL_FAULT_ARM_MARGIN_SEC = 60;
 const DEFAULT_REBIND_EVERY = 0;
 const DEFAULT_SETTLEMENT_CRASH_EVERY = 0;
 const DEFAULT_SSH_FAULT_EVERY = 0;
@@ -112,6 +115,7 @@ function frozenPlan(plan) {
   return {
     modes: [...plan.modes],
     run_delay_sec: plan.runDelaySec,
+    seed_timeout_sec: plan.seedTimeoutSec,
     restart_every: plan.restartEvery,
     rebind_every: plan.rebindEvery,
     settlement_crash_every: plan.settlementCrashEvery,
@@ -157,6 +161,46 @@ export function aggregateEnduranceProgress(segmentSummaries) {
     ),
     last_round: summaries.reduce((max, item) => Math.max(max, Number(item.round_end || 0)), 0),
   };
+}
+
+export function summarizeEnduranceCoverage(segmentSummaries) {
+  const rounds = segmentSummaries.flatMap((segment) => segment.rounds || []);
+  const cases = rounds.flatMap((round) => round.cases || []);
+  return {
+    rounds: rounds.length,
+    local_process_cases: cases.filter((item) => item.mode === "local-process").length,
+    slurm_cases: cases.filter((item) => item.mode === "slurm").length,
+    serve_restarts: rounds.filter((round) => Boolean(round.restart)).length,
+    ssh_loss_recoveries: rounds.filter((round) => Boolean(round.ssh_fault)).length,
+    rebind_recoveries: cases.filter((item) => Boolean(item.rebind_fault)).length,
+    settlement_crash_recoveries: cases.filter((item) => Boolean(item.settlement_crash_fault)).length,
+  };
+}
+
+export function evaluateV1EnduranceQualification({
+  targetDurationSec,
+  progress,
+  segmentSummaries,
+  dirtySegments = [],
+}) {
+  const coverage = summarizeEnduranceCoverage(segmentSummaries);
+  const target = Number(targetDurationSec);
+  const requirements = {
+    target_duration_at_least_7200: Number.isFinite(target) && target >= 7200,
+    active_time_meets_target:
+      Number.isFinite(target) && Number(progress?.active_elapsed_sec || 0) >= target,
+    no_dirty_segments: dirtySegments.length === 0,
+    at_least_two_rounds: coverage.rounds >= 2,
+    mixed_local_and_slurm: coverage.local_process_cases > 0 && coverage.slurm_cases > 0,
+    serve_restart_repeated: coverage.serve_restarts >= 2,
+    ssh_loss_recovery_repeated: coverage.ssh_loss_recoveries >= 2,
+    branch_rebind_repeated: coverage.rebind_recoveries >= 2,
+    settlement_crash_recovery_repeated: coverage.settlement_crash_recoveries >= 2,
+  };
+  const reasons = Object.entries(requirements)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return { qualified: reasons.length === 0, requirements, coverage, reasons };
 }
 
 async function existingSegmentState(evidenceDir) {
@@ -218,6 +262,36 @@ export function assertResumableEnduranceState(prior) {
   );
 }
 
+export async function inspectEnduranceEvidence(evidenceDir) {
+  const root = resolve(evidenceDir);
+  const sessionPath = join(root, ENDURANCE_SESSION_FILE);
+  if (!existsSync(sessionPath)) throw new Error(`endurance evidence missing ${sessionPath}`);
+  const session = JSON.parse(await readFile(sessionPath, "utf8"));
+  const state = await existingSegmentState(root);
+  const dirtySegments = [
+    ...(state.failed_segments || []).map((segment) => `failed:${segment}`),
+    ...(state.incomplete_segments || []).map((segment) => `incomplete:${segment}`),
+    ...(state.ambiguous_segments || []).map((segment) => `ambiguous:${segment}`),
+    ...(state.missing_segments || []).map((segment) => `missing:${segment}`),
+  ];
+  const v1Endurance = evaluateV1EnduranceQualification({
+    targetDurationSec: session?.contract?.target_duration_sec,
+    progress: state.progress,
+    segmentSummaries: state.summaries,
+    dirtySegments,
+  });
+  return {
+    schema_version: 1,
+    evidence_dir: root,
+    session_nonce: session?.nonce || null,
+    created_at: session?.created_at || null,
+    target_duration_sec: session?.contract?.target_duration_sec ?? null,
+    progress: state.progress,
+    dirty_segments: dirtySegments,
+    v1_endurance: v1Endurance,
+  };
+}
+
 export function parseModes(value) {
   const modes = String(value || "local-process,slurm")
     .split(",")
@@ -245,6 +319,7 @@ export function buildSoakPlan(options) {
   const sshFaultEvery = Number(options.sshFaultEvery ?? DEFAULT_SSH_FAULT_EVERY);
   const sshFaultSec = Number(options.sshFaultSec ?? DEFAULT_SSH_FAULT_SEC);
   const timeoutSec = Number(options.timeoutSec ?? DEFAULT_TIMEOUT_SEC);
+  const seedTimeoutSec = Number(options.seedTimeoutSec ?? Math.min(DEFAULT_SEED_TIMEOUT_SEC, timeoutSec));
 
   if (!Number.isInteger(rounds) || rounds < 1 || rounds > 1000) {
     throw new Error("--rounds must be an integer between 1 and 1000");
@@ -282,6 +357,23 @@ export function buildSoakPlan(options) {
   if (!Number.isFinite(timeoutSec) || timeoutSec < 60 || timeoutSec > 3600) {
     throw new Error("--timeout-sec must be between 60 and 3600");
   }
+  if (!Number.isInteger(seedTimeoutSec) || seedTimeoutSec < 60 || seedTimeoutSec > 540) {
+    throw new Error("--seed-timeout-sec must be an integer between 60 and 540");
+  }
+  if (seedTimeoutSec > timeoutSec) {
+    throw new Error("--seed-timeout-sec must not exceed --timeout-sec");
+  }
+  const hasActiveFault = restartEvery > 0 || rebindEvery > 0 || settlementCrashEvery > 0 || sshFaultEvery > 0;
+  if (
+    targetDurationSec !== undefined &&
+    targetDurationSec >= FORMAL_ENDURANCE_MIN_TARGET_SEC &&
+    hasActiveFault &&
+    runDelaySec < seedTimeoutSec + FORMAL_FAULT_ARM_MARGIN_SEC
+  ) {
+    throw new Error(
+      `formal endurance with active fault injection requires --run-delay-sec >= --seed-timeout-sec + ${FORMAL_FAULT_ARM_MARGIN_SEC}`,
+    );
+  }
   if (modes.includes("slurm")) {
     if (!options.host) throw new Error("Slurm soak requires --host");
     if (!options.workdir || !String(options.workdir).startsWith("/")) {
@@ -298,6 +390,7 @@ export function buildSoakPlan(options) {
     durationSec,
     targetDurationSec,
     runDelaySec,
+    seedTimeoutSec,
     restartEvery,
     rebindEvery,
     settlementCrashEvery,
@@ -320,6 +413,7 @@ function parseArgs(argv) {
     sshFaultEvery: DEFAULT_SSH_FAULT_EVERY,
     sshFaultSec: DEFAULT_SSH_FAULT_SEC,
     timeoutSec: DEFAULT_TIMEOUT_SEC,
+    seedTimeoutSec: undefined,
     evidenceRoot: resolve("acceptance-output"),
     resumeEvidenceDir: undefined,
   };
@@ -341,6 +435,7 @@ function parseArgs(argv) {
     "--ssh-fault-sec",
     "--pi-api-module",
     "--timeout-sec",
+    "--seed-timeout-sec",
     "--evidence-root",
     "--resume-evidence-dir",
     "--pi-executable",
@@ -372,6 +467,7 @@ function parseArgs(argv) {
       case "--ssh-fault-sec": result.sshFaultSec = Number(value); break;
       case "--pi-api-module": result.piApiModule = resolve(value); break;
       case "--timeout-sec": result.timeoutSec = Number(value); break;
+      case "--seed-timeout-sec": result.seedTimeoutSec = Number(value); break;
       case "--evidence-root": result.evidenceRoot = resolve(value); break;
       case "--resume-evidence-dir": result.resumeEvidenceDir = resolve(value); break;
       case "--pi-executable": result.piExecutable = value; break;
@@ -1013,7 +1109,7 @@ async function runRound(options, shared, round) {
   const cases = await Promise.all(options.plan.modes.map((mode) => seedCase(options, shared, round, mode)));
   try {
     for (const item of cases) {
-      await finishSeedCase(item, options.plan.timeoutSec * 1000);
+      await finishSeedCase(item, options.plan.seedTimeoutSec * 1000);
     }
     const submitted = await waitForSubmittedCases(
       cases,
@@ -1226,6 +1322,12 @@ export async function runSoak(options) {
     const completedSegments = [...prior.summaries, segmentSummary];
     const progress = aggregateEnduranceProgress(completedSegments);
     const targetDurationSec = options.targetDurationSec ?? null;
+    const v1Endurance = evaluateV1EnduranceQualification({
+      targetDurationSec,
+      progress,
+      segmentSummaries: completedSegments,
+      dirtySegments: [],
+    });
     const summary = {
       schema_version: 2,
       ok: prior.failed_segments.length === 0,
@@ -1246,7 +1348,9 @@ export async function runSoak(options) {
       total_cases: progress.total_cases,
       active_elapsed_sec: progress.active_elapsed_sec,
       last_round: progress.last_round,
+      v1_endurance: v1Endurance,
       run_delay_sec: options.plan.runDelaySec,
+      seed_timeout_sec: options.plan.seedTimeoutSec,
       restart_every: options.plan.restartEvery,
       rebind_every: options.plan.rebindEvery,
       settlement_crash_every: options.plan.settlementCrashEvery,
@@ -1302,19 +1406,27 @@ function usage() {
     "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --modes local-process --rounds 1 --run-delay-sec 45 --restart-every 0 --rebind-every 0 --settlement-crash-every 1",
     "",
     "One-process duration soak:",
-    "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --host <ssh-alias> --workdir </shared/workspace> --duration-sec 7200 --target-duration-sec 7200 --run-delay-sec 30 --rebind-every 5 --settlement-crash-every 7 --ssh-fault-every 3 --ssh-fault-sec 8",
+    "  node scripts/acceptance/pi_v1_soak.mjs --confirm-real-provider --runwatch-exe <packaged runwatch> --model <provider/model> --host <ssh-alias> --workdir </shared/workspace> --duration-sec 7200 --target-duration-sec 7200 --run-delay-sec 600 --seed-timeout-sec 480 --rebind-every 5 --settlement-crash-every 7 --ssh-fault-every 3 --ssh-fault-sec 8",
     "",
     "Resumable endurance session:",
     "  first segment: add --target-duration-sec 7200 and a bounded --duration-sec <segment-seconds>",
     "  later segments: repeat the frozen model/host/workdir/fault arguments and add --resume-evidence-dir <existing-soak-dir>",
+    "  read-only qualification report: node scripts/acceptance/pi_v1_soak.mjs --report-evidence-dir <existing-soak-dir>",
     "",
-    "A resumable session freezes runwatch, the active pi-runs runtime/acceptance tree, Pi API, pi-ssh-tools code, model, workspace and fault cadence in endurance-session.json. Each invocation reuses the same runwatch data directory, IPC endpoint and monotonically increasing round numbers, but writes a new immutable segment-NNNN checkpoint. Segment-boundary supervisor restart is explicit additional fault coverage; only clean successful segment active time accumulates toward --target-duration-sec. A failed, interrupted/incomplete, ambiguous or missing prior segment makes the session non-resumable and is a release-blocking failure; after diagnosis, start a new endurance session rather than washing the failure out with later time. Active-run restarts kill only the isolated serve child. Rebind rounds use Pi's exported SessionManager API to make a real sibling branch in the same persisted session, require needs_rebind with zero completion injection, then explicitly rebind the same Delivery. Settlement-crash rounds kill serve only after one completion is persisted and before the settlement receipt, then require orphan recovery without duplicating completion. SSH-fault rounds route only runwatch's SSH transport through an evidence-local localhost relay, require an unreachable/probe_error Observation after cut, then require a fresh Observation on the same scheduler job after restore. Evidence is preserved under acceptance-output/.",
+    "A resumable session freezes runwatch, the active pi-runs runtime/acceptance tree, Pi API, pi-ssh-tools code, model, workspace and fault cadence in endurance-session.json. Formal >=7200 s fault endurance also requires scientific run delay to exceed the bounded initiating-Pi seed timeout by a safety margin, so early submissions remain active until all seed sessions have armed; Slurm walltime is derived from that delay rather than fixed at two minutes. Each invocation reuses the same runwatch data directory, IPC endpoint and monotonically increasing round numbers, but writes a new immutable segment-NNNN checkpoint. Segment-boundary supervisor restart is explicit additional fault coverage; only clean successful segment active time accumulates toward --target-duration-sec. A failed, interrupted/incomplete, ambiguous or missing prior segment makes the session non-resumable and is a release-blocking failure; after diagnosis, start a new endurance session rather than washing the failure out with later time. Active-run restarts kill only the isolated serve child. Rebind rounds use Pi's exported SessionManager API to make a real sibling branch in the same persisted session, require needs_rebind with zero completion injection, then explicitly rebind the same Delivery. Settlement-crash rounds kill serve only after one completion is persisted and before the settlement receipt, then require orphan recovery without duplicating completion. SSH-fault rounds route only runwatch's SSH transport through an evidence-local localhost relay, require an unreachable/probe_error Observation after cut, then require a fresh Observation on the same scheduler job after restore. Evidence is preserved under acceptance-output/.",
   ].join("\n");
 }
 
 async function main() {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(usage());
+    return;
+  }
+  const reportIndex = process.argv.indexOf("--report-evidence-dir");
+  if (reportIndex >= 0) {
+    const evidenceDir = process.argv[reportIndex + 1];
+    if (!evidenceDir) throw new Error("--report-evidence-dir requires a path");
+    console.log(JSON.stringify(await inspectEnduranceEvidence(evidenceDir), null, 2));
     return;
   }
   const options = parseArgs(process.argv.slice(2));

@@ -48,6 +48,22 @@ function quotePosixLiteral(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
+export function slurmAcceptanceTime(delaySec, marginSec = 120) {
+  const delay = Number(delaySec);
+  const margin = Number(marginSec);
+  if (!Number.isInteger(delay) || delay < 1 || delay > 600) {
+    throw new Error("Slurm acceptance delay must be an integer between 1 and 600");
+  }
+  if (!Number.isInteger(margin) || margin < 60 || margin > 600) {
+    throw new Error("Slurm acceptance walltime margin must be an integer between 60 and 600");
+  }
+  const total = delay + margin;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 export function buildAcceptanceSpec(options, nonce) {
   const mode = options.mode;
   const runId = `r8b_${mode === "slurm" ? "slurm" : "local"}_${nonce}`.replace(
@@ -86,7 +102,7 @@ export function buildAcceptanceSpec(options, nonce) {
         host: options.host,
         workdir: options.workdir,
         command,
-        time: "00:02:00",
+        time: slurmAcceptanceTime(delaySec),
         cpus: 1,
       },
       verificationTools: ["runs_status", "runs_logs", "ssh_activate", "ssh_read"],
