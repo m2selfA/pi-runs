@@ -51,7 +51,7 @@ async function waitFor(predicate, timeoutMs, label) {
 }
 
 test(
-  "real Pi live bridge claims a branch-matched terminal Delivery, injects completion, and acks delivered",
+  "real Pi live bridge keeps completion durable and retries when the triggered agent turn fails",
   { skip: !ENABLED, timeout: 30_000 },
   async () => {
     const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -212,8 +212,8 @@ test(
     });
 
     try {
-      await waitFor(() => state.ack, 15_000, "live Delivery ack");
-      assert.equal(state.ack.outcome, "delivered");
+      await waitFor(() => state.ack, 15_000, "live Delivery retry ack after failed agent turn");
+      assert.equal(state.ack.outcome, "retry");
       assert.equal(state.ack.delivery_id, "live-bridge-smoke:a1:terminal");
       assert.ok(state.registration?.session_id, "Pi should register its real session id");
       assert.ok(state.registration?.session_file, "Pi should register its real session file");
@@ -225,15 +225,20 @@ test(
       );
 
       const sessionFile = state.registration.session_file;
-      await waitFor(async () => {
+      const persisted = await waitFor(async () => {
         try {
           const text = await readFile(sessionFile, "utf8");
           return text.includes('"customType":"runwatch/completion"') &&
-            text.includes("live-bridge-smoke:a1:terminal");
+            text.includes("live-bridge-smoke:a1:terminal") ? text : null;
         } catch {
-          return false;
+          return null;
         }
       }, 5_000, "persisted live completion message");
+      assert.equal(
+        persisted.includes('"customType":"runwatch/completion-settled"'),
+        false,
+        "failed live agent outcome must not write a delivered settlement receipt",
+      );
     } catch (error) {
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nPi stdout:\n${stdout}\nPi stderr:\n${stderr}\nrequests=${JSON.stringify(state.requests)}`,

@@ -366,6 +366,7 @@ export function readJsonLines(path) {
 export function readDatabaseEvidence(dbPath, runId) {
   if (!existsSync(dbPath)) return null;
   const db = new DatabaseSync(dbPath, { readOnly: true });
+  db.exec("PRAGMA busy_timeout = 1000");
   try {
     const runRow = db.prepare("SELECT record_json FROM runs WHERE run_id=?").get(runId);
     if (!runRow) return null;

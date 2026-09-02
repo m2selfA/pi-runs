@@ -69,6 +69,12 @@ export default function (pi: ExtensionAPI) {
   let offlineSettledPendingAck = false;
   let offlineAgentOutcome: { ok: boolean; error?: string } | undefined;
   let offlineDeliveryFinished = false;
+  let liveDelivery: any | undefined;
+  let liveBootstrapSent = false;
+  let liveAgentStarted = false;
+  let liveSettledPendingAck = false;
+  let liveAgentOutcome: { ok: boolean; error?: string } | undefined;
+  let agentActive = false;
 
   const refreshStatus = async (ctx: ExtensionContext) => {
     if (!ctx.hasUI || statusRefreshInFlight) return;
@@ -150,6 +156,54 @@ export default function (pi: ExtensionAPI) {
     } catch {
       bridgeState = "offline";
       // Keep the RPC worker alive. The session loop will retry once runwatch IPC returns.
+    }
+  };
+
+  const resetLiveDelivery = () => {
+    liveDelivery = undefined;
+    liveBootstrapSent = false;
+    liveAgentStarted = false;
+    liveSettledPendingAck = false;
+    liveAgentOutcome = undefined;
+  };
+
+  const finishLiveSettled = async (ctx: ExtensionContext) => {
+    if (!liveDelivery || !liveSettledPendingAck) return;
+    const registration = sessionRegistration(ctx);
+    const outcome =
+      liveAgentOutcome ||
+      ({ ok: false, error: "live Pi settled without a final successful agent_end" } as const);
+    try {
+      if (outcome.ok) {
+        const evidence = inspectOfflineDeliverySession(
+          ctx.sessionManager.getBranch(),
+          liveDelivery.delivery_id,
+        );
+        if (evidence.state !== "settled") {
+          pi.appendEntry(COMPLETION_SETTLED_ENTRY_TYPE, {
+            schema_version: 1,
+            delivery_id: liveDelivery.delivery_id,
+            run_id: liveDelivery.payload?.run_id,
+            attempt_no: liveDelivery.payload?.attempt_no,
+            outcome: "delivered",
+            settled_at: new Date().toISOString(),
+            settled_leaf_id: ctx.sessionManager.getLeafId(),
+            live_owner_instance_id: ownerInstanceId,
+          });
+        }
+      }
+      await ackDelivery(
+        registration,
+        liveDelivery.delivery_id,
+        outcome.ok ? "delivered" : "retry",
+        outcome.ok ? undefined : outcome.error,
+        { timeout_ms: 1_200 },
+      );
+      resetLiveDelivery();
+    } catch {
+      bridgeState = "offline";
+      // Keep the live session and its durable completion evidence intact. The next bridge refresh
+      // retries settlement/ack without injecting a second runwatch/completion.
     }
   };
 
@@ -274,12 +328,19 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const claimed = await claimDeliveries(registration, { timeout_ms: 1_200, limit: 8 });
-      const deliverable = [];
-      for (const delivery of claimed) {
-        if (deliveryFitsCurrentBranch(delivery, registration, ctx)) {
-          deliverable.push(delivery);
-        } else {
+      if (liveDelivery) {
+        if (liveSettledPendingAck) await finishLiveSettled(ctx);
+        bridgeDeliveries = await deliveryStatus(registration, { timeout_ms: 900 });
+        return;
+      }
+
+      // One live Delivery per triggered Pi turn keeps completion, agent outcome, settlement receipt,
+      // and final ack unambiguous. Additional terminal Runs remain pending and are claimed on the
+      // next bridge refresh after this Delivery settles.
+      const claimed = await claimDeliveries(registration, { timeout_ms: 1_200, limit: 1 });
+      const delivery = claimed[0];
+      if (delivery) {
+        if (!deliveryFitsCurrentBranch(delivery, registration, ctx)) {
           await ackDelivery(
             registration,
             delivery.delivery_id,
@@ -287,43 +348,64 @@ export default function (pi: ExtensionAPI) {
             "Run origin leaf/session file is not on the current Pi branch",
             { timeout_ms: 900 },
           );
-        }
-      }
-
-      if (deliverable.length) {
-        const content = formatCompletionMessage(deliverable);
-        try {
-          await Promise.resolve(
-            pi.sendMessage(
-              {
-                customType: "runwatch/completion",
-                content,
-                display: true,
-                details: {
-                  delivery_ids: deliverable.map((item: any) => item.delivery_id),
-                  runs: deliverable.map((item: any) => item.payload),
-                },
-              },
-              { triggerTurn: true, deliverAs: "followUp" },
-            ),
+        } else {
+          const sessionEvidence = inspectOfflineDeliverySession(
+            ctx.sessionManager.getBranch(),
+            delivery.delivery_id,
           );
-          for (const delivery of deliverable) {
+          if (sessionEvidence.state === "settled") {
             await ackDelivery(registration, delivery.delivery_id, "delivered", undefined, {
               timeout_ms: 900,
             });
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          for (const delivery of deliverable) {
+          } else if (sessionEvidence.state === "completed_success") {
+            liveDelivery = delivery;
+            liveAgentOutcome = { ok: true };
+            liveSettledPendingAck = true;
+            await finishLiveSettled(ctx);
+          } else {
+            const recoveringExistingCompletion =
+              sessionEvidence.state === "injected_unsettled" ||
+              sessionEvidence.state === "completed_failure";
+            // sendMessage({ triggerTurn: true }) may synchronously emit agent_start before returning.
+            // Arm the exact live Delivery first so agent_start/agent_end/agent_settled are bound to
+            // this completion instead of being mistaken for an unrelated Pi turn.
+            liveDelivery = delivery;
+            liveBootstrapSent = true;
+            liveAgentStarted = agentActive;
+            liveAgentOutcome = undefined;
+            liveSettledPendingAck = false;
             try {
-              await ackDelivery(registration, delivery.delivery_id, "retry", message, {
-                timeout_ms: 900,
-              });
-            } catch {
-              // The claim lease will expire and make the delivery retryable even if this ack is lost.
+              await Promise.resolve(
+                pi.sendMessage(
+                  {
+                    customType: recoveringExistingCompletion
+                      ? "runwatch/completion-recovery"
+                      : "runwatch/completion",
+                    content: recoveringExistingCompletion
+                      ? formatCompletionRecoveryMessage(delivery)
+                      : formatCompletionMessage([delivery]),
+                    display: true,
+                    details: {
+                      delivery_ids: [delivery.delivery_id],
+                      runs: [delivery.payload],
+                      recovery: recoveringExistingCompletion,
+                    },
+                  },
+                  { triggerTurn: true, deliverAs: "followUp" },
+                ),
+              );
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              try {
+                await ackDelivery(registration, delivery.delivery_id, "retry", message, {
+                  timeout_ms: 900,
+                });
+              } finally {
+                resetLiveDelivery();
+              }
+              throw err;
             }
           }
-          throw err;
         }
       }
 
@@ -581,9 +663,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async () => {
+    agentActive = true;
     if (offlineBootstrapSent && !offlineDeliveryFinished) {
       offlineAgentStarted = true;
       offlineAgentOutcome = undefined;
+    }
+    if (liveBootstrapSent && liveDelivery) {
+      liveAgentStarted = true;
+      liveAgentOutcome = undefined;
     }
   });
 
@@ -596,12 +683,20 @@ export default function (pi: ExtensionAPI) {
     ) {
       offlineAgentOutcome = classifyFinalAgentOutcome(event.messages);
     }
+    if (liveBootstrapSent && liveDelivery && liveAgentStarted && !event.willRetry) {
+      liveAgentOutcome = classifyFinalAgentOutcome(event.messages);
+    }
+    agentActive = false;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     if (offlineBootstrapSent && offlineAgentStarted && !offlineDeliveryFinished) {
       offlineSettledPendingAck = true;
       await finishOfflineSettled(ctx);
+    }
+    if (liveBootstrapSent && liveDelivery && liveAgentStarted) {
+      liveSettledPendingAck = true;
+      await finishLiveSettled(ctx);
     }
   });
 

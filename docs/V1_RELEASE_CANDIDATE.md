@@ -73,7 +73,7 @@ A real isolated cross-project smoke with a freshly rebuilt runwatch executable r
 
 The npm `files` allowlist ships only the active extension, active src, acceptance scripts, Skill/reference material and assets. `legacy/`, old systemd units, `pi-runs-wake`, old runner/store/wakeup code and legacy parser tests are Git history/reference only and must not enter the package.
 
-The latest dry run contains 22 files. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
+The latest dry run contains **23 files / 162,003 bytes unpacked**. The only added release-harness file is `scripts/acceptance/ssh_fault_relay.mjs`; legacy/runtime-retired surfaces remain excluded. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
 
 ## Release gates
 
@@ -87,11 +87,13 @@ Already qualified:
 - exactly-once Delivery/AgentInvocation/session settlement;
 - mixed Local + Slurm resident serve-restart qualification;
 - Windows resident upgrade/uninstall lifecycle: Task Scheduler `/End` plus verified supervisor-only termination released supervisor/serve ownership without process-tree cancellation; runwatch refuses unregister while an independent owner remains.
+- focused completion-before-settlement crash recovery with one completion, one settlement and retry-safe recovery;
+- focused same-session sibling-branch `needs_rebind -> runs_rebind -> delivered` using real Pi SessionManager lineage and live two-phase settlement;
+- focused real hpc.example SSH transport cut/recovery on Job <job-id>: `fresh -> unreachable -> fresh`, same JobID, then exactly-once offline continuation;
+- explicit real-Pi live failure regression: completion remains durable, no false settlement is written, and Delivery is retried rather than acked delivered.
 
 Still blocking a v1 tag:
 
-- a true endurance run, not merely a short qualification, with prolonged concurrent workloads and resident daemon restart;
-- transient SSH-loss/recovery during remote work;
-- prolonged branch-divergence/rebind and completion/settlement crash-window coverage;
+- one true multi-hour endurance run from the current packaged layout that repeatedly combines concurrent Local + scheduler workloads with resident restart, SSH loss/recovery, branch rebind and completion/settlement crash recovery. The focused fault dimensions are already qualified; duration/repetition under one resident authority is the remaining gate.
 
 No formal gate may require a human `continue` message.
