@@ -985,6 +985,19 @@ async function injectTransientSshLoss(item, shared, timeoutMs) {
   };
 }
 
+export function faultAttemptBounds(item) {
+  const rebindRetry = Number(Boolean(item?.injectRebind));
+  const settlementCrashRetry = Number(Boolean(item?.injectSettlementCrash));
+  const optionalGlobalCrashRetry = Number(Boolean(item?.allowGlobalCrashRetry));
+  const deliveryMin = 1 + rebindRetry + settlementCrashRetry;
+  return {
+    delivery_min: deliveryMin,
+    delivery_max: deliveryMin + optionalGlobalCrashRetry,
+    invocation_min: 1 + settlementCrashRetry,
+    invocation_max: 1 + settlementCrashRetry + rebindRetry + optionalGlobalCrashRetry,
+  };
+}
+
 async function inspectCompletedCase(item, shared, timeoutMs) {
   assert.ok(item.initial, `initial Pi ${item.spec.runId} must be validated before fault injection`);
   const initial = item.initial;
@@ -1052,34 +1065,17 @@ async function inspectCompletedCase(item, shared, timeoutMs) {
     rebindFault.final_origin_leaf_id = durable.binding.origin_leaf_id;
     rebindFault.branch_marker_leaf_id = item.branchFault.new_leaf_id;
   }
-  const injectedExtraAttempts = Number(Boolean(item.injectRebind)) + Number(Boolean(item.injectSettlementCrash));
-  if (item.injectRebind && !item.injectSettlementCrash) {
-    assert.equal(durable.delivery.attempts, 2, "branch divergence plus explicit rebind must retry the same Delivery exactly once");
-    assert.ok(
-      durable.invocation_count >= 1 && durable.invocation_count <= 2,
-      "rebind may recover through the resumed live Pi process or one replacement offline Invocation",
-    );
-  } else if (item.allowGlobalCrashRetry) {
-    assert.ok(
-      durable.delivery.attempts >= 1 && durable.delivery.attempts <= 2,
-      "non-target case may have at most one retry from the round's injected serve crash",
-    );
-    assert.ok(
-      durable.invocation_count >= 1 && durable.invocation_count <= 2,
-      "non-target case may have at most one extra AgentInvocation from the round's injected serve crash",
-    );
-  } else {
-    assert.equal(
-      durable.delivery.attempts,
-      1 + injectedExtraAttempts,
-      "Delivery attempts must match only the explicitly injected rebind/crash windows",
-    );
-    assert.equal(
-      durable.invocation_count,
-      1 + injectedExtraAttempts,
-      "AgentInvocation count must match only the explicitly injected rebind/crash windows",
-    );
-  }
+  const faultBounds = faultAttemptBounds(item);
+  assert.ok(
+    durable.delivery.attempts >= faultBounds.delivery_min &&
+      durable.delivery.attempts <= faultBounds.delivery_max,
+    `Delivery attempts ${durable.delivery.attempts} outside injected-fault bounds ${faultBounds.delivery_min}..${faultBounds.delivery_max}`,
+  );
+  assert.ok(
+    durable.invocation_count >= faultBounds.invocation_min &&
+      durable.invocation_count <= faultBounds.invocation_max,
+    `AgentInvocation count ${durable.invocation_count} outside injected-fault bounds ${faultBounds.invocation_min}..${faultBounds.invocation_max}`,
+  );
   const sessionRows = readJsonLines(durable.binding.session_file);
   const session = inspectPersistedSession(sessionRows, item.spec, durable.delivery.delivery_id);
   assert.equal(session.session_id, durable.binding.session_id);

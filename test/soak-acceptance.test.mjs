@@ -9,6 +9,7 @@ import {
   buildSoakPlan,
   deliverySessionCounts,
   evaluateV1EnduranceQualification,
+  faultAttemptBounds,
   isDurablySubmittedRun,
   parseModes,
   piApiModuleForShimPath,
@@ -235,6 +236,33 @@ test("resumable endurance fails closed on failed, incomplete, ambiguous, or miss
       /not resumable|prior segment|new endurance session/i,
     );
   }
+});
+
+test("combined rebind and global settlement crash accounts for both retry sources", () => {
+  assert.deepEqual(faultAttemptBounds({}), {
+    delivery_min: 1,
+    delivery_max: 1,
+    invocation_min: 1,
+    invocation_max: 1,
+  });
+  assert.deepEqual(faultAttemptBounds({ injectRebind: true }), {
+    delivery_min: 2,
+    delivery_max: 2,
+    invocation_min: 1,
+    invocation_max: 2,
+  });
+  assert.deepEqual(faultAttemptBounds({ injectSettlementCrash: true }), {
+    delivery_min: 2,
+    delivery_max: 2,
+    invocation_min: 2,
+    invocation_max: 2,
+  });
+  assert.deepEqual(faultAttemptBounds({ injectRebind: true, allowGlobalCrashRetry: true }), {
+    delivery_min: 2,
+    delivery_max: 3,
+    invocation_min: 1,
+    invocation_max: 3,
+  });
 });
 
 test("fault cadence is bounded and can schedule rebind plus settlement crash", () => {
