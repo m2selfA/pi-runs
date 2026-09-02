@@ -15,6 +15,7 @@ Pi integration for durable **Runs** managed by runwatch. Submit long scientific 
 ## V1 scope freeze
 
 The current release target is deliberately limited to **Pi + pi-runs + runwatch**, with `pi-ssh-tools` providing Pi-online remote workspace access. The real Pi/provider/HPC continuation loop already works; current development is focused on installation/readiness, repeatable release acceptance, endurance testing and legacy retirement. Support for Codex or any other coding agent is deferred until this v1 path is complete and should live in a separate Agent Integration project rather than in pi-runs.
+The frozen v1 adapter/release contract is documented in `docs/V1_RELEASE_CANDIDATE.md`.
 
 `sbatch` / `bsub` / process launch succeeding only means work was submitted. Long scientific waits should be handed off durably instead of keeping Pi in a polling tool call.
 
@@ -69,7 +70,7 @@ The extension uses its own `pi-runs` status key rather than replacing Pi's foote
 
 `PI_RUNS_BACKEND=auto` and `PI_RUNS_BACKEND=runwatch` use the canonical runwatch control plane and fail closed when it is unavailable or lacks the requested capability. `PI_RUNS_BACKEND=legacy` is retired from the active runtime and also fails closed. Historical source/data-format reference remains under `legacy/` for explicit manual migration work only.
 
-`runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or selects a second ledger. A production-ready Pi v1 environment reports `selected_backend=runwatch`; requesting retired `legacy` reports `ready=false` with an explicit retirement reason.
+`runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, reports the daemon build `version` for diagnosis, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. Exact version equality is not required: compatibility is protocol 1 + required capabilities. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or selects a second ledger. A production-ready Pi v1 environment reports `selected_backend=runwatch`; requesting retired `legacy` reports `ready=false` with an explicit retirement reason.
 
 Production durable execution includes **Windows Local × Process** as well as remote Slurm/LSF. Local `runs_submit` with no host and `runner=auto|process` is normalized to runwatch `Process`; the archived PowerShell `Start-Job` implementation is not reachable from the active runtime. Local Process is deliberately fail-closed if the Windows host Job Object does not permit process breakaway, because launching a child that dies with runwatchd would violate the durability contract.
 

@@ -389,10 +389,13 @@ The functional Pi path is already proven. R8 turns that path into a repeatable p
 - [x] Final R8d regression passes **39 tests / 0 failed / 1 skipped**. A new default `npm test` loader regression makes real Pi parse/load `extensions/runs/index.ts` when Pi is available; it immediately caught and fixed a missing-comma syntax regression that ordinary JS tests could not see. The explicit real-Pi live bridge then passed **1/1** again.
 - [x] `npm pack --dry-run --json` confirms the publish surface is only **22 files / 124,773 bytes unpacked** and contains no `legacy/`, systemd wakeup units, callback bin, old runner/store code or legacy parser tests. Git keeps the archive; the distributed Pi package does not.
 
-### R8e — v1 release candidate
+### R8e — v1 release candidate — in progress 2026-09-02
 
-- [ ] Freeze Pi tool/schema/Skill semantics, installation documentation and runwatch protocol compatibility expectations.
-- [ ] Re-run unit, live-bridge, real-provider, remote-HPC, local-Process and endurance gates from the supported release/install layout before tagging v1.
+- [x] Frozen Pi v1 tool/schema/Skill/backend semantics in `docs/V1_RELEASE_CANDIDATE.md`: active tools are `runs_doctor`, `runs_submit`, `runs_wait`, `runs_status`, `runs_logs`, `runs_harvest`, `runs_cancel`, `runs_rebind`; submit runners are `auto|process|slurm|lsf`; active backends are `auto|runwatch`; retired legacy/powershell/webhook/wakeup paths stay fail-closed/archive-only.
+- [x] Frozen runwatch compatibility as protocol/capability based rather than exact-version based. `hello.version` is now diagnostic metadata propagated through `clientInfo`/`runs_doctor`; Pi v1 still requires protocol 1, `runwatchd`/`sqlite-wal`, and the exact required capability set.
+- [x] Real isolated cross-project doctor smoke passed against a freshly rebuilt runwatch executable: `ready=true`, `runwatch.version=0.1.0`, protocol 1 and zero missing capabilities. The first smoke deliberately exposed a stale `target/debug/runwatch.exe` after `cargo test`, so the release contract now requires explicitly rebuilding the actual executable used by external smokes.
+- [x] Frozen the npm publish boundary: the package allowlist excludes `legacy/`, callback bin, systemd wakeup units and old parser tests; current dry-run surface remains 22 files.
+- [ ] Re-run the final unit, live-bridge, real-provider, remote-HPC, local-Process and **true endurance** gates from the supported release/install layout before tagging v1. R8c endurance remains the release blocker, not a reason to weaken the RC checklist.
 
 ### Post-v1 AgentAdapter policy
 

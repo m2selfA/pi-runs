@@ -89,6 +89,7 @@ test("Pi v1 readiness requires runwatch authority, identity, and the full capabi
     transport: "local-ipc",
     endpoint: "test-endpoint",
     protocol_version: 1,
+    version: "0.1.0-test",
     service: "runwatchd",
     storage: "sqlite-wal",
     capabilities: [...PI_V1_REQUIRED_CAPABILITIES],
@@ -96,6 +97,7 @@ test("Pi v1 readiness requires runwatch authority, identity, and the full capabi
   const ready = assessPiV1Readiness(healthy, "auto");
   assert.equal(ready.ready, true);
   assert.equal(ready.selected_backend, "runwatch");
+  assert.equal(ready.runwatch.version, "0.1.0-test");
   assert.deepEqual(ready.missing_capabilities, []);
   assert.deepEqual(ready.reasons, []);
 

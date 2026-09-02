@@ -110,6 +110,7 @@ export function assessPiV1Readiness(runwatchInfo, requested = "auto") {
       transport: runwatchInfo?.transport || "local-ipc",
       endpoint: runwatchInfo?.endpoint,
       protocol_version: runwatchInfo?.protocol_version,
+      version: runwatchInfo?.version,
       service: runwatchInfo?.service,
       storage: runwatchInfo?.storage,
       capabilities,
