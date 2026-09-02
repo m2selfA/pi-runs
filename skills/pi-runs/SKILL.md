@@ -18,7 +18,7 @@ Pi integration for durable **Runs**. `runwatchd` owns the long-lived Run lifecyc
 7. When a Run belongs to a remote workspace and `ssh_activate` is available, explicitly activate the recorded `host:/cwd` before reading/editing scientific outputs. Never assume SSH mode persisted across Pi sessions.
 8. On continuation, inspect `runs_status` / `runs_logs`, then inspect expected artifacts and continue the scientific reasoning that created this Run. Do not resubmit merely because the previous Pi process disappeared.
 9. If continuation reports a branch mismatch / `needs_rebind`, do not force it into the current branch; rebind explicitly.
-10. The default backend never silently falls back to the legacy `~/.pi/runs` ledger when runwatchd is unavailable or lacks a capability. Treat that as a durable-control-plane failure. `PI_RUNS_BACKEND=legacy` is an explicit migration escape hatch only.
+10. The active runtime is runwatch-only and never falls back to the legacy `~/.pi/runs` ledger. Treat runwatch unavailability/capability gaps as durable-control-plane failures. `PI_RUNS_BACKEND=legacy` is retired and must fail closed; `legacy/` is historical migration reference only.
 11. Windows local long jobs use runwatch `Process` (`runner=process`, or `auto` with no host). Never substitute the legacy PowerShell `Start-Job` backend. If runwatch reports that Windows Job breakaway is denied, treat that as a durability failure and use the resident `runwatch supervise` / autostart service rather than bypassing the check.
 
 ## Tools

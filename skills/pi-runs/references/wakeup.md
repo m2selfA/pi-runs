@@ -1,7 +1,7 @@
 # Wakeup backends
 
-These backends describe the **legacy pi-runs runtime** and are retained only during migration. Do not extend them for new durable behavior.
+These backends describe the **retired legacy pi-runs runtime**. Their source/templates are archived under `legacy/` for historical migration reference only and are not loaded by the active package. Do not extend them for new durable behavior.
 
 The target wakeup path is runwatchd's durable Delivery outbox plus the Pi continuation adapter. `runs_wait` is a short synchronous wait and is not a wakeup backend for long scientific work.
 
-Legacy `sidecar`, `systemd-user`, `powershell-event`, webhook, and `pi-runs-wake` code remains available only until the corresponding runwatch capabilities are migrated.
+Legacy `sidecar`, `systemd-user`, `powershell-event`, webhook, `pi-runs-wake`, and systemd templates are archived only for reference. The supported wakeup path is runwatch Delivery + Pi continuation.

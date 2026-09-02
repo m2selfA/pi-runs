@@ -380,10 +380,14 @@ The functional Pi path is already proven. R8 turns that path into a repeatable p
 - [ ] Run concurrent long workloads across daemon restarts, transient SSH loss, scheduler completion and offline Pi relaunch.
 - [ ] Include same-session branch divergence/rebind and crash windows around completion injection/settlement so exactly-once guarantees survive prolonged operation.
 
-### R8d — legacy compatibility retirement
+### R8d — legacy compatibility retirement — completed 2026-09-02
 
-- [ ] Inventory real user migration needs for `~/.pi/runs`, `src/runners/*`, `src/wakeup/*`, `pi-runs-wake` and historical callbacks.
-- [ ] Delete or convert obsolete legacy paths to explicit import/migration tooling only after the release path no longer needs them; never restore automatic fallback.
+- [x] Inventoried the pre-runwatch compatibility surface: `~/.pi/runs` JSONL/store schema, scheduler runner/parser modules, wakeup backends, `pi-runs-wake`, systemd templates, PowerShell `Start-Job`, webhook callback behavior and their parser tests. R8b/R8c proved the release path no longer depends on any of them.
+- [x] Retired the legacy backend from the active runtime. `PI_RUNS_BACKEND=legacy` now fails closed; `runner=powershell` is rejected; active `src/` and the Pi extension no longer import legacy runner/store/wakeup code; package.json no longer exposes the `pi-runs-wake` bin.
+- [x] Preserved the old implementation by Git rename under `legacy/` rather than destructive deletion: runner/store/parser/wakeup code, callback bin, parser test and systemd templates remain available for historical/manual migration reference. Any future old-data migration must be a new explicit read-only importer, never a hidden second authority.
+- [x] Active tool/schema/status surfaces were narrowed accordingly: `runs_submit.runner` is now `auto|process|slurm|lsf`; webhook/wakeup knobs are no longer exposed; status is runwatch-only; README/design/Skill/AGENTS all describe the archived boundary.
+- [x] Final R8d regression passes **39 tests / 0 failed / 1 skipped**. A new default `npm test` loader regression makes real Pi parse/load `extensions/runs/index.ts` when Pi is available; it immediately caught and fixed a missing-comma syntax regression that ordinary JS tests could not see. The explicit real-Pi live bridge then passed **1/1** again.
+- [x] `npm pack --dry-run --json` confirms the publish surface is only **22 files / 124,773 bytes unpacked** and contains no `legacy/`, systemd wakeup units, callback bin, old runner/store code or legacy parser tests. Git keeps the archive; the distributed Pi package does not.
 
 ### R8e — v1 release candidate
 
@@ -394,19 +398,11 @@ The functional Pi path is already proven. R8 turns that path into a repeatable p
 
 The Codex experiment in runwatch proved that a second agent can use the durable continuation model, but it is not current pi-runs scope. After v1, other agents should receive independent Agent Integration projects (for example a future `codex-runs`) rather than being added to pi-runs or further embedded into runwatch. No such project is created during R8.
 
-## Legacy compatibility debt
+## Legacy archive (retired from active runtime)
 
-Do not expand these paths:
+`legacy/` contains the frozen pre-runwatch implementation: JSONL/store helpers, scheduler runner/parser modules, wakeup backends, callback bin, systemd templates and parser regression. Active package code must not import it and package metadata must not expose it as an executable path. Historical `~/.pi/runs` user data is not automatically read or mutated by v1.
 
-- `~/.pi/runs/runs.jsonl`
-- `src/runners/*`
-- `src/wakeup/*`
-- `bin/pi-runs-wake.mjs`
-- PowerShell `Start-Job` durability assumptions
-- best-effort webhook delivery
-- process-local long wait loop
-
-They are now unreachable from the default `auto` backend and will be deleted or converted to import tooling after any required legacy-data migration. First-class Local × Process now lives in runwatch and is the default durable local path; the old `Start-Job` implementation must not regain automatic routing.
+If real migration demand appears later, add an explicit bounded/read-only importer that translates old records into the canonical runwatch authority. Never restore `auto -> legacy`, `runner=powershell`, best-effort webhook wakeup or a second durable writer.
 
 ## End-to-end product gate
 

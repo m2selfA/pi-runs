@@ -48,11 +48,11 @@ pi-runs 不 import `pi-ssh-tools`，也不要求它存在；只在工具可用�
 
 当前 v1 范围冻结为这三个 Pi-facing 平面。其它 coding agent 的 session identity、resume 机制和 UX 不进入 pi-runs；等 `runwatch` + `pi-runs` v1 结束后，如需支持 Codex 等 agent，应建立独立 Agent Integration 项目并只复用 runwatch 的 agent-neutral durable contract。
 
-后端选择同样遵守 single-authority：`PI_RUNS_BACKEND=auto` 只使用 runwatch，daemon 离线或缺少 capability 时 fail closed；旧 `~/.pi/runs`/runner/wakeup 只有显式 `PI_RUNS_BACKEND=legacy` 才能进入。
+后端选择同样遵守 single-authority：`PI_RUNS_BACKEND=auto|runwatch` 只使用 runwatch，daemon 离线或缺少 capability 时 fail closed；`PI_RUNS_BACKEND=legacy` 已从 active runtime 退役并显式失败。旧 `~/.pi/runs` 数据格式、runner/wakeup 源码只保留在 `legacy/` 作为人工迁移/历史参考。
 
 ### Pi v1 readiness
 
-`runs_doctor` 是 Pi-facing 的只读 readiness surface，不是安装器。它直接读取 runwatch local IPC `hello`，要求 protocol v1、`service=runwatchd`、`storage=sqlite-wal`，并核对 Pi v1 实际依赖的完整 capability 集：durable submit/status/wait/logs/artifacts/cancel、live session lease/delivery/rebind、offline invocation ownership 与 `offline_pi_continuation`。任何缺失都返回 `ready=false` 和明确原因；`PI_RUNS_BACKEND=legacy` 即使本地旧 backend 可用，也始终只标为 migration backend，不能成为 v1 readiness success。
+`runs_doctor` 是 Pi-facing 的只读 readiness surface，不是安装器。它直接读取 runwatch local IPC `hello`，要求 protocol v1、`service=runwatchd`、`storage=sqlite-wal`，并核对 Pi v1 实际依赖的完整 capability 集：durable submit/status/wait/logs/artifacts/cancel、live session lease/delivery/rebind、offline invocation ownership 与 `offline_pi_continuation`。任何缺失都返回 `ready=false` 和明确原因；请求已退役的 `PI_RUNS_BACKEND=legacy` 同样返回 `ready=false`，不会启动第二份 ledger。
 
 安装边界保持简单：runwatch 的 portable release 独立提供 `runwatch/runwatch-mcp/runwatch-gui`，pi-runs 作为 Pi package 单独安装并通过 local IPC 使用 resident `runwatchd`。pi-runs 不复制 runwatch binary、不管理第二个 daemon，也不因为 readiness 失败回退到旧 ledger。
 
@@ -157,7 +157,6 @@ status key: pi-runs
 Runs 2 running · 1 queued
 Runs 1 running · 1 failed
 Runs idle
-Runs 2 queued · legacy
 ```
 
 Design rules:
@@ -167,9 +166,9 @@ Design rules:
 - warning tone for failed/timed-out/lost/unknown, accent for live Runs, muted for idle;
 - refresh in a session-scoped loop only while UI exists: initialize on `session_start`, refresh after relevant tool/turn changes, clear on `session_shutdown`;
 - all status reads are bounded and non-blocking from the agent turn's perspective;
-- explicit `PI_RUNS_BACKEND=legacy` appends `legacy`; default `auto` must show runwatch unavailability rather than silently displaying the old ledger.
+- active v1 status is runwatch-only；请求已退役的 `PI_RUNS_BACKEND=legacy` 必须 fail closed，`auto` 在 runwatch 不可用时直接显示 control-plane failure；
 
-With the canonical runwatch backend, the base live count is **session-scoped**: Runs bound to the current Pi session are expanded normally, unrelated active Runs are compressed to `N other live`, and failures/unknown states outside the session are surfaced as `N global attention` so important global problems are never hidden. runwatch Observation sidecars keep execution and visibility separate: a current live Run can remain `running` while `observation.health=unreachable|probe_error`, in which case the footer adds `N probe issue(s)` and warning tone; live probe failures from another Pi session contribute to `global attention`. Normal `fresh` observations stay silent. Current-session continuation attention adds `N continuation`, `N rebind`, `session busy`, and `bridge offline`. Legacy summaries remain global because legacy Runs do not have a trustworthy durable session binding. Run/observation/bridge composition is kept in a pure summary function with regression tests, while UI publication remains session-scoped.
+With the canonical runwatch backend, the base live count is **session-scoped**: Runs bound to the current Pi session are expanded normally, unrelated active Runs are compressed to `N other live`, and failures/unknown states outside the session are surfaced as `N global attention` so important global problems are never hidden. runwatch Observation sidecars keep execution and visibility separate: a current live Run can remain `running` while `observation.health=unreachable|probe_error`, in which case the footer adds `N probe issue(s)` and warning tone; live probe failures from another Pi session contribute to `global attention`. Normal `fresh` observations stay silent. Current-session continuation attention adds `N continuation`, `N rebind`, `session busy`, and `bridge offline`. Run/observation/bridge composition is kept in a pure summary function with regression tests, while UI publication remains session-scoped.
 
 ## Pi session / branch binding
 
@@ -229,21 +228,11 @@ runwatchd 将 terminal completion 持久化成 deterministic pending Delivery。
 
 自动恢复不得偷偷批准未信任项目。无法安全恢复时 Delivery 应进入明确 blocked 状态，等待用户处理。
 
-## 当前兼容实现
+## Legacy archive
 
-仓库当前仍包含：
+pre-runwatch 实现已经从 active runtime 退役并整体归档到 `legacy/`：旧 JSONL store/schema、scheduler runner/parser、wakeup backends、`pi-runs-wake` callback、systemd user templates 与 parser test 都只用于人工迁移/历史参考。package 不再暴露 `pi-runs-wake` npm bin，active `src/` / extension 不 import `legacy/`，`runner=powershell` 与 `PI_RUNS_BACKEND=legacy` 都显式 fail closed。
 
-```text
-~/.pi/runs/runs.jsonl
-src/runners/*
-src/wakeup/*
-长时 wait loop
-pi-runs-wake
-```
-
-这些是 pre-runwatch migration 的兼容实现，不再扩张。它们只在显式 `PI_RUNS_BACKEND=legacy` 下可作为迁移逃生口；默认 `auto` 不再在 daemon 离线/capability 缺失时切换到第二份 ledger。远端 Slurm/LSF 与 Windows 本地 Process 的 durable submit/status/logs/artifacts/cancel/wait 都已进入 runwatch 单一 authority。
-
-本地长任务不再以 legacy PowerShell `Start-Job` 冒充 durable 能力。第一等 `Local × Process` 已在 runwatch 中实现，并通过真实 Task Scheduler/supervisor 路径的进程脱离 + daemon-kill + terminal observation 门禁；pi-runs 默认把无 host 的 `runner=auto|process` 归一化为这一 durable path。若宿主 Windows Job Object 不允许 breakaway，runwatch 必须 fail closed，而不是降级成非持久子进程。
+远端 Slurm/LSF 与 Windows 本地 Process 的 durable submit/status/logs/artifacts/cancel/wait 已全部进入 runwatch 单一 authority。本地长任务不再以 legacy PowerShell `Start-Job` 冒充 durable 能力；若宿主 Windows Job Object 不允许 breakaway，runwatch 必须 fail closed，而不是降级成非持久子进程。历史 `~/.pi/runs` 数据若未来确有迁移需求，应新增**显式只读 import 工具**，而不是重新启用旧 runtime。
 
 ## Pi extension best practices
 

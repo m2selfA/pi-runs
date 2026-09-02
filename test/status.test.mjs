@@ -16,15 +16,6 @@ test("status summary stays compact around actionable run states", () => {
   assert.equal(summary.tone, "warning");
 });
 
-test("legacy pending/submitted states collapse into queued", () => {
-  const summary = summarizeRuns(
-    [{ status: "submitted" }, { status: "submitting" }, { status: "pending" }],
-    "legacy",
-  );
-  assert.equal(summary.text, "Runs 3 queued · legacy");
-  assert.equal(summary.live, 3);
-});
-
 test("idle history does not flood the footer with success counts", () => {
   const summary = summarizeRuns([{ status: "succeeded" }, { status: "cancelled" }]);
   assert.equal(summary.text, "Runs idle");
@@ -61,10 +52,6 @@ test("Pi status exposes bridge health only for the runwatch backend", () => {
   assert.equal(
     summarizePiRunsStatus([], "runwatch", {}, "offline").text,
     "Runs idle · bridge offline",
-  );
-  assert.equal(
-    summarizePiRunsStatus([], "legacy", {}, "offline").text,
-    "Runs idle · legacy",
   );
   assert.equal(
     summarizePiRunsStatus([], "runwatch", {}, "busy").text,
@@ -147,17 +134,9 @@ test("Pi status counts another session's live probe failure as global attention"
   assert.equal(summary.tone, "warning");
 });
 
-test("legacy status stays global because legacy Runs do not have durable Pi binding", () => {
-  const summary = summarizePiRunsStatus(
-    [
-      { status: "running", session_id: "current" },
-      { status: "queued", session_id: "other" },
-    ],
-    "legacy",
-    {},
-    "unknown",
-    { session_id: "current" },
+test("retired status backends fail closed", () => {
+  assert.throws(
+    () => summarizePiRunsStatus([], "legacy", {}, "unknown"),
+    /status backend legacy is retired/,
   );
-  assert.equal(summary.text, "Runs 1 running · 1 queued · legacy");
-  assert.equal(summary.scoped_session_id, undefined);
 });

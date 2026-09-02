@@ -22,12 +22,16 @@ function env(value) {
 test("backend auto fails closed instead of switching durable authority when daemon is unavailable", async () => {
   await assert.rejects(
     () => backendInfo("get_run", env("auto")),
-    /refuses implicit legacy fallback.*runwatchd is unavailable/,
+    /requires the runwatch authority.*runwatchd is unavailable/,
   );
 });
 
-test("explicit legacy does not require a daemon probe", async () => {
-  assert.equal((await backendInfo("submit_run", env("legacy"))).selected, "legacy");
+test("explicit legacy is retired from the active runtime", async () => {
+  await assert.rejects(() => backendInfo("get_run", env("legacy")), /legacy has been retired/);
+  const report = await doctorInfo({ env: env("legacy"), timeout_ms: 100 });
+  assert.equal(report.ready, false);
+  assert.equal(report.selected_backend, null);
+  assert.match(report.reasons.join(" "), /legacy is retired/);
 });
 
 test("explicit runwatch fails closed while daemon is unavailable", async () => {
@@ -72,7 +76,7 @@ test("auto rejects a capability gap instead of selecting legacy", async () => {
   try {
     await assert.rejects(
       () => backendInfo("cancel_run", { PI_RUNS_BACKEND: "auto" }, { endpoint }),
-      /refuses implicit legacy fallback.*does not advertise capability cancel_run/,
+      /requires the runwatch authority.*does not advertise capability cancel_run/,
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -110,8 +114,8 @@ test("Pi v1 readiness requires runwatch authority, identity, and the full capabi
 
   const legacy = assessPiV1Readiness(healthy, "legacy");
   assert.equal(legacy.ready, false);
-  assert.equal(legacy.selected_backend, "legacy");
-  assert.match(legacy.reasons.join(" "), /migration backend/);
+  assert.equal(legacy.selected_backend, null);
+  assert.match(legacy.reasons.join(" "), /legacy is retired/);
 });
 
 test("doctor reports an unavailable daemon without silently falling back to legacy", async () => {
@@ -129,9 +133,9 @@ test("remote Slurm/LSF submission selects v2 capability only with explicit works
     "submit_run_v2",
   );
   assert.equal(submitCapability({ runner: "slurm", workdir: "/shared/project" }), "submit_run");
-  assert.equal(
-    submitCapability({ runner: "powershell", host: "hpc.example", workdir: "/x" }),
-    "submit_run",
+  assert.throws(
+    () => normalizeSubmitRequest({ command: "x", runner: "powershell" }, "C:/science"),
+    /runner=powershell has been retired/,
   );
 });
 

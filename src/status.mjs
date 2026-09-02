@@ -16,7 +16,7 @@ function hasObservationAttention(run) {
   return health === "probe_error" || health === "unreachable";
 }
 
-export function summarizeRuns(runs, backend = "runwatch") {
+export function summarizeRuns(runs) {
   const counts = {
     queued: 0,
     running: 0,
@@ -44,7 +44,6 @@ export function summarizeRuns(runs, backend = "runwatch") {
   if (counts.unknown) parts.push(`${counts.unknown} unknown`);
 
   let text = parts.length ? `Runs ${parts.join(" · ")}` : "Runs idle";
-  if (backend === "legacy") text += " · legacy";
 
   return {
     text,
@@ -52,7 +51,7 @@ export function summarizeRuns(runs, backend = "runwatch") {
     counts,
     live: counts.running + counts.queued,
     attention: failed + counts.unknown,
-    backend,
+    backend: "runwatch",
   };
 }
 
@@ -63,9 +62,12 @@ export function summarizePiRunsStatus(
   bridgeState = "unknown",
   options = {},
 ) {
+  if (backend !== "runwatch") {
+    throw new Error(`status backend ${backend} is retired; Pi v1 status is runwatch-only`);
+  }
   const allRuns = Array.isArray(runs) ? runs : [];
   const currentSessionId =
-    backend === "runwatch" && typeof options?.session_id === "string" && options.session_id.trim()
+    typeof options?.session_id === "string" && options.session_id.trim()
       ? options.session_id.trim()
       : undefined;
   const currentRuns = currentSessionId
@@ -74,8 +76,8 @@ export function summarizePiRunsStatus(
   const otherRuns = currentSessionId
     ? allRuns.filter((run) => normalizedSessionId(run) !== currentSessionId)
     : [];
-  const summary = summarizeRuns(currentRuns, backend);
-  const otherSummary = summarizeRuns(otherRuns, "runwatch");
+  const summary = summarizeRuns(currentRuns);
+  const otherSummary = summarizeRuns(otherRuns);
   const pending = Number(deliveries?.pending || 0);
   const delivering = Number(deliveries?.delivering || 0);
   const retrying = Number(deliveries?.retrying || 0);
@@ -111,7 +113,7 @@ export function summarizePiRunsStatus(
   if (bridgeState === "busy") {
     text += " · session busy";
     tone = "warning";
-  } else if (bridgeState === "offline" && backend === "runwatch") {
+  } else if (bridgeState === "offline") {
     text += " · bridge offline";
     tone = "warning";
   }

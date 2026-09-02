@@ -10,7 +10,7 @@ Pi integration for durable **Runs** managed by runwatch. Submit long scientific 
 - 设计：[docs/design.md](docs/design.md)
 - 开发进度：[docs/DEVELOPMENT_CHECKPOINT.md](docs/DEVELOPMENT_CHECKPOINT.md)
 
-`runwatchd` is the single durable Run Lifecycle Authority for the default path. The original local runner/wakeup implementation remains only behind explicit `PI_RUNS_BACKEND=legacy` migration compatibility; `auto` never silently switches to that second ledger if runwatch is unavailable. `pi-ssh-tools` remains the Pi-online remote workspace layer.
+`runwatchd` is the single durable Run Lifecycle Authority. The pre-runwatch local runner/wakeup implementation is archived under `legacy/` for historical migration/reference only and is no longer selectable by the active runtime; `PI_RUNS_BACKEND=legacy` fails closed. `pi-ssh-tools` remains the Pi-online remote workspace layer.
 
 ## V1 scope freeze
 
@@ -35,7 +35,7 @@ pi install /path/to/pi-runs
 | `runs_status` | canonical runwatch snapshot; fails closed if the durable control plane is unavailable |
 | `runs_logs` | tail |
 | `runs_harvest` | record artifacts |
-| `runs_cancel` | durable scancel / bkill request through runwatch; legacy Stop-Job only under explicit legacy mode |
+| `runs_cancel` | durable scancel / bkill / Local Process cancellation request through runwatch |
 | `runs_rebind` | explicitly attach a branch-blocked completion to the current Pi session branch |
 
 ## Pi v1 release acceptance
@@ -63,15 +63,15 @@ Runs 1 running · 1 continuation
 Runs idle · 1 rebind
 ```
 
-The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. Explicit legacy mode is marked `legacy`; default `auto` reports runwatch unavailability rather than silently showing another ledger. Current-session continuation work adds `continuation`, `rebind`, `session busy`, or `bridge offline` attention without filling the footer with historical successes.
+The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. The active v1 status surface is runwatch-only; durable-control-plane failures are shown as attention rather than switching ledgers. Current-session continuation work adds `continuation`, `rebind`, `session busy`, or `bridge offline` attention without filling the footer with historical successes.
 
 ## Backend safety
 
-`PI_RUNS_BACKEND=auto` and `PI_RUNS_BACKEND=runwatch` use the canonical runwatch control plane and fail closed when it is unavailable or lacks the requested capability. To inspect or operate the pre-runwatch local JSONL implementation, set `PI_RUNS_BACKEND=legacy` explicitly for migration work.
+`PI_RUNS_BACKEND=auto` and `PI_RUNS_BACKEND=runwatch` use the canonical runwatch control plane and fail closed when it is unavailable or lacks the requested capability. `PI_RUNS_BACKEND=legacy` is retired from the active runtime and also fails closed. Historical source/data-format reference remains under `legacy/` for explicit manual migration work only.
 
-`runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or silently selects legacy. A production-ready Pi v1 environment reports `selected_backend=runwatch`; explicit `legacy` is always reported as migration-only and not v1-ready.
+`runs_doctor` is the supported read-only readiness surface. It probes only runwatch's local `hello`, verifies protocol/service/storage identity, checks the complete Pi v1 capability contract, and reports `ready`, `missing_capabilities`, and actionable `reasons`. It never installs runwatch, starts/stops services, edits Pi/runwatch configuration, or selects a second ledger. A production-ready Pi v1 environment reports `selected_backend=runwatch`; requesting retired `legacy` reports `ready=false` with an explicit retirement reason.
 
-Production durable execution now includes **Windows Local × Process** as well as remote Slurm/LSF. Local `runs_submit` with no host and `runner=auto|process` is normalized to runwatch `Process`; the old PowerShell `Start-Job` runner remains explicit legacy compatibility only. Local Process is deliberately fail-closed if the Windows host Job Object does not permit process breakaway, because launching a child that dies with runwatchd would violate the durability contract.
+Production durable execution includes **Windows Local × Process** as well as remote Slurm/LSF. Local `runs_submit` with no host and `runner=auto|process` is normalized to runwatch `Process`; the archived PowerShell `Start-Job` implementation is not reachable from the active runtime. Local Process is deliberately fail-closed if the Windows host Job Object does not permit process breakaway, because launching a child that dies with runwatchd would violate the durability contract.
 
 For remote Slurm/LSF, `workdir` is a **shared durable workspace contract**, not merely a directory that exists on the SSH login host. The path must resolve to the same persistent filesystem from the login node and scheduler compute nodes so runwatch can observe its wrapper sentinel/logs and Pi can inspect scientific outputs after continuation. Node-local paths such as `/tmp` are unsupported unless that cluster explicitly provides them as shared storage.
 
@@ -92,21 +92,17 @@ Crash recovery also carries session-side idempotency: successful offline settlem
 ## Layout
 
 ```
-extensions/runs/     Pi tools
-src/runners/         slurm | lsf | powershell
-src/wakeup/          poll | sidecar | systemd-user | powershell-event | webhook
-units/               systemd user templates
-bin/pi-runs-wake     callback entry (no compute)
+extensions/runs/     active Pi tools + live/offline continuation bridge
+src/                 active runwatch client/backend/status adapter
+scripts/acceptance/  repeatable release + soak gates
+skills/pi-runs/       Pi workflow/safety guidance
+legacy/              archived pre-runwatch runners/wakeup/store/callback code
 assets/              icon + wordmark
 ```
 
-## Callbacks
+## Legacy archive
 
-- Linux: copy `units/` to `~/.config/systemd/user/`, `loginctl enable-linger $USER`.
-- Every job wrapper writes `~/.pi/runs/<id>/terminal` (`succeeded 0` / `failed N`).
-- `pi-runs-wake <id>` only refreshes the store.
-
-Override the store with `PI_RUNS_HOME`.
+`legacy/` is not loaded by the package and exposes no npm `bin`. It preserves the old JSONL store, scheduler wrappers, wakeup backends, callback entry point, parser test and systemd templates only as migration/history reference. New durable behavior must not be added there.
 
 ## Tests
 

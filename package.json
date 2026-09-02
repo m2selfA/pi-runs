@@ -4,17 +4,21 @@
   "description": "Pi integration for durable long-running scientific Runs managed by runwatch.",
   "type": "module",
   "license": "MIT",
+  "files": [
+    "extensions/",
+    "src/",
+    "scripts/",
+    "skills/",
+    "assets/"
+  ],
   "keywords": [
     "pi-package",
     "hpc",
     "slurm",
     "lsf",
-    "powershell",
+    "runwatch",
     "scientific-computing"
   ],
-  "bin": {
-    "pi-runs-wake": "./bin/pi-runs-wake.mjs"
-  },
   "exports": {
     ".": "./src/index.ts"
   },

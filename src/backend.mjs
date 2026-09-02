@@ -1,4 +1,3 @@
-import * as legacy from "./core.mjs";
 import * as runwatch from "./runwatch-client.mjs";
 
 const VALID_BACKENDS = new Set(["auto", "legacy", "runwatch"]);
@@ -33,11 +32,9 @@ export function requestedBackend(env = process.env) {
 export async function backendInfo(capability = "hello", env = process.env, options = {}) {
   const requested = requestedBackend(env);
   if (requested === "legacy") {
-    return {
-      requested,
-      selected: "legacy",
-      runwatch: { available: false, capabilities: [], reason: "legacy explicitly requested" },
-    };
+    throw new Error(
+      "PI_RUNS_BACKEND=legacy has been retired from the active runtime; use runwatch or inspect the archived legacy/ source only for historical migration work",
+    );
   }
 
   const runwatchInfo = await runwatch.clientInfo({ ...options, env });
@@ -64,10 +61,7 @@ export async function backendInfo(capability = "hello", env = process.env, optio
   const reason = runwatchInfo.available
     ? `runwatchd is online but does not advertise capability ${capability}`
     : `runwatchd is unavailable: ${runwatchInfo.reason}`;
-  throw new Error(
-    `PI_RUNS_BACKEND=auto refuses implicit legacy fallback: ${reason}. ` +
-      "Use PI_RUNS_BACKEND=legacy only as an explicit migration compatibility choice.",
-  );
+  throw new Error(`PI_RUNS_BACKEND=auto requires the runwatch authority: ${reason}.`);
 }
 
 export function assessPiV1Readiness(runwatchInfo, requested = "auto") {
@@ -82,7 +76,7 @@ export function assessPiV1Readiness(runwatchInfo, requested = "auto") {
 
   if (requested === "legacy") {
     reasons.push(
-      "PI_RUNS_BACKEND=legacy explicitly selects the migration backend; Pi v1 production requires runwatch",
+      "PI_RUNS_BACKEND=legacy is retired from the active runtime; archived source remains only for historical migration reference",
     );
   }
   if (!runwatchInfo?.available) {
@@ -110,7 +104,7 @@ export function assessPiV1Readiness(runwatchInfo, requested = "auto") {
     schema_version: 1,
     ready,
     requested_backend: requested,
-    selected_backend: requested === "legacy" ? "legacy" : ready ? "runwatch" : null,
+    selected_backend: ready ? "runwatch" : null,
     runwatch: {
       available: Boolean(runwatchInfo?.available),
       transport: runwatchInfo?.transport || "local-ipc",
@@ -149,6 +143,12 @@ export async function doctorInfo(options = {}) {
 
 export function normalizeSubmitRequest(req, cwd) {
   const runner = String(req?.runner || "auto").toLowerCase();
+  if (runner === "powershell") {
+    throw new Error("runner=powershell has been retired; use durable runner=process for local Windows work");
+  }
+  if (!["auto", "process", "slurm", "lsf"].includes(runner)) {
+    throw new Error(`unsupported durable runner=${runner}`);
+  }
   const host = typeof req?.host === "string" && req.host.trim() ? req.host.trim() : undefined;
   const workdir = typeof req?.workdir === "string" && req.workdir.trim() ? req.workdir : undefined;
 
@@ -186,7 +186,7 @@ export function submitCapability(req) {
 
 async function selectedModule(capability, options = {}) {
   const info = await backendInfo(capability, options.env ?? process.env, options);
-  return { module: info.selected === "runwatch" ? runwatch : legacy, info };
+  return { module: runwatch, info };
 }
 
 export async function submitRun(req, options = {}) {
@@ -214,8 +214,7 @@ export async function statusRun(runId, options = {}) {
 
 export async function statusOverview(options = {}) {
   const info = await backendInfo("list_runs", options.env ?? process.env, options);
-  const module = info.selected === "runwatch" ? runwatch : legacy;
-  const runs = await module.statusRun(undefined, options);
+  const runs = await runwatch.statusRun(undefined, options);
   return { backend: info.selected, backend_info: info, runs };
 }
 
