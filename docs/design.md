@@ -46,6 +46,8 @@ Pi coding agent
 
 pi-runs 不 import `pi-ssh-tools`，也不要求它存在；只在工具可用时通过能力检测给模型更好的恢复指导。
 
+当前 v1 范围冻结为这三个 Pi-facing 平面。其它 coding agent 的 session identity、resume 机制和 UX 不进入 pi-runs；等 `runwatch` + `pi-runs` v1 结束后，如需支持 Codex 等 agent，应建立独立 Agent Integration 项目并只复用 runwatch 的 agent-neutral durable contract。
+
 后端选择同样遵守 single-authority：`PI_RUNS_BACKEND=auto` 只使用 runwatch，daemon 离线或缺少 capability 时 fail closed；旧 `~/.pi/runs`/runner/wakeup 只有显式 `PI_RUNS_BACKEND=legacy` 才能进入。
 
 ## RemoteWorkspaceRef
@@ -249,23 +251,22 @@ pi-runs-wake
 
 ## MCP 的位置
 
-Pi 首发主链路是：
+Pi v1 唯一主链路是：
 
 ```text
 pi-runs -> local runwatch client/IPC -> runwatchd
 ```
 
-不是 `pi-runs -> MCP -> runwatch`。MCP 是 runwatch 面向其它 agent 的通用 adapter，不能迫使 Pi 放弃自己的 session lifecycle / custom message 能力。
+不是 `pi-runs -> MCP -> runwatch`。MCP 可以继续作为 runwatch 的通用协议面，但其它 agent 的 identity/resume/settlement/onboarding 应在 v1 之后进入独立 Agent Integration 项目；不能为了未来 agent 迫使 Pi 放弃自己的 session lifecycle / custom message 能力，也不能继续把 agent-specific 逻辑堆进 runwatch。
 
-## 迁移顺序
+## 当前完成顺序
 
-1. R0：冻结三项目 authority 与新 Skill 语义。
-2. R1/R2：runwatch durable core 与 remote execution v2。
-3. R3：pi-runs 增加 runwatch client boundary；backend 可选择 legacy/runwatch，逐工具迁移。
-4. R4：Pi live continuation（已完成）。
-5. R6：live branch lineage / explicit rebind（已完成；offline 路径复用）。
-6. R5：Pi offline continuation。
-7. R7：无人值守 fault matrix。
-8. 后续：复用 runwatch 核心接 Codex CLI 等 AgentAdapter。
+1. R0–R7：三项目 authority、runwatch client migration、Pi live/offline continuation、branch safety 和核心 fault matrix（已完成主要功能验证）。
+2. R8a：supported install/readiness surface。
+3. R8b：repeatable real-Pi release acceptance。
+4. R8c：multi-hour soak/endurance。
+5. R8d：legacy compatibility retirement。
+6. R8e：v1 release candidate。
+7. **只有 v1 完成后**，才重新评估 agent-neutral adapter extraction 和 Codex/其它 agent 的独立 integration projects。
 
 详细状态必须以 [DEVELOPMENT_CHECKPOINT.md](DEVELOPMENT_CHECKPOINT.md) 为准。

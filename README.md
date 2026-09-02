@@ -12,6 +12,10 @@ Pi integration for durable **Runs** managed by runwatch. Submit long scientific 
 
 `runwatchd` is the single durable Run Lifecycle Authority for the default path. The original local runner/wakeup implementation remains only behind explicit `PI_RUNS_BACKEND=legacy` migration compatibility; `auto` never silently switches to that second ledger if runwatch is unavailable. `pi-ssh-tools` remains the Pi-online remote workspace layer.
 
+## V1 scope freeze
+
+The current release target is deliberately limited to **Pi + pi-runs + runwatch**, with `pi-ssh-tools` providing Pi-online remote workspace access. The real Pi/provider/HPC continuation loop already works; current development is focused on installation/readiness, repeatable release acceptance, endurance testing and legacy retirement. Support for Codex or any other coding agent is deferred until this v1 path is complete and should live in a separate Agent Integration project rather than in pi-runs.
+
 `sbatch` / `bsub` / process launch succeeding only means work was submitted. Long scientific waits should be handed off durably instead of keeping Pi in a polling tool call.
 
 ## Install

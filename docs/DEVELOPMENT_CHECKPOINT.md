@@ -29,7 +29,7 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 5. pi-runs should gain a runwatch client abstraction before deleting the legacy backend, so migration is staged and testable.
 6. Remote science workspace manipulation stays in pi-ssh-tools; runwatch/pi-runs only carry `RemoteWorkspaceRef` metadata and Run observability.
 7. Tool failures throw; cancellation propagates; output is bounded; Pi-native lifecycle hooks are used for live session registration.
-8. Pi is the first AgentAdapter; generic MCP is not the Pi primary path.
+8. Pi is the only Agent Integration target for the current v1 release. Other coding-agent integrations are design backlog only until `runwatch` + `pi-runs` v1 is complete; they must not expand pi-runs or turn runwatch into an agent-specific host.
 
 ## Milestones
 
@@ -45,7 +45,8 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 | R5 | Pi offline exact-session continuation | **real exact-session + hpc.example provider-success acceptance passed 2026-08-31** |
 | R6 | origin-leaf lineage + `runs_rebind` | **real same-session `/tree` block + rebind recovery passed 2026-08-31** |
 | R7 | unattended/fault matrix with remote HPC | **core crash/restart matrix completed 2026-08-31; multi-hour soak remains release hardening** |
-| R9 | AgentAdapter lessons exported for Codex CLI integration | planned |
+| R8 | Pi-first v1 production closure | **in progress 2026-09-02 — installation/readiness, repeatable real-Pi release gate, soak/endurance, legacy retirement and release candidate** |
+| R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred post-v1 — design only; no Codex/other-agent project work until runwatch + pi-runs v1 is complete** |
 
 ## P0 repository baseline — completed 2026-09-02
 
@@ -53,7 +54,7 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 - [x] Added cross-platform text normalization and ignore rules for local environment files, coverage/cache output, TypeScript build metadata and temporary files.
 - [x] Pre-commit high-risk credential scan found **0 hits**; no `node_modules`, `dist`, `.env`, database, key material or large generated files are present in the repository baseline.
 - [x] Baseline regression: `npm test` — **37 passed, 0 failed, 1 explicit real-Pi live gate skipped by default**.
-- [x] The initial commit intentionally captures the current runwatch-backed Pi integration as the historical baseline; legacy runner/wakeup code remains compatibility-only and is not re-authorized as a second durable control plane.
+- [x] The initial commit **`<opaque-id>` — `feat: establish runwatch-backed pi-runs baseline`** intentionally captures the current runwatch-backed Pi integration as the historical baseline; legacy runner/wakeup code remains compatibility-only and is not re-authorized as a second durable control plane.
 
 ## R0 completion record
 
@@ -344,6 +345,41 @@ Local Process routing/documentation regression at R3e closeout: `npm test` — *
 - [x] The exact Pi session JSONL persisted both `customType=runwatch/completion` and the Delivery id before the gate completed.
 - [x] The live bridge durable-acked `delivery_id=live-bridge-smoke:a1:terminal` with `outcome=delivered`.
 - [x] Explicit command `PI_RUNS_REAL_LIVE_ACCEPTANCE=1 node --test test/live-bridge-real-pi.test.mjs` — **1 passed, 0 failed** in about 2.3s. The gate uses an invalid temporary provider key and terminates after delivery acceptance; provider success is deliberately not part of live-delivery correctness.
+
+## R8 — Pi-first v1 production closure — in progress 2026-09-02
+
+The functional Pi path is already proven. R8 turns that path into a repeatable product release and intentionally blocks new AgentAdapter work until closure.
+
+### R8a — installation/readiness surface — next
+
+- [ ] Define the supported installation relationship between the Pi package and the runwatch release layout without copying runwatch binaries into pi-runs or creating a second daemon manager.
+- [ ] Make missing/incompatible runwatchd, unavailable capabilities, extension-load failure and backend selection diagnosable from the Pi-facing surface while remaining fail-closed.
+- [ ] Keep `PI_RUNS_BACKEND=legacy` an explicit migration escape hatch only; installation/readiness must never silently select it.
+
+### R8b — repeatable real-Pi release acceptance
+
+- [ ] Encode the already-passed real Pi provider + exact-session continuation + hpc.example Slurm loop as an explicit opt-in release gate using isolated runwatch/Pi state and guaranteed bounded cleanup.
+- [ ] Exercise both remote Slurm and Windows Local × Process execution shapes while reusing the same continuation/settlement contract.
+- [ ] Require exactly-once Pi session evidence (`runwatch/completion` / settlement receipt), durable Delivery/Invocation completion and explicit remote workspace reactivation/result inspection.
+
+### R8c — multi-hour soak/endurance
+
+- [ ] Run concurrent long workloads across daemon restarts, transient SSH loss, scheduler completion and offline Pi relaunch.
+- [ ] Include same-session branch divergence/rebind and crash windows around completion injection/settlement so exactly-once guarantees survive prolonged operation.
+
+### R8d — legacy compatibility retirement
+
+- [ ] Inventory real user migration needs for `~/.pi/runs`, `src/runners/*`, `src/wakeup/*`, `pi-runs-wake` and historical callbacks.
+- [ ] Delete or convert obsolete legacy paths to explicit import/migration tooling only after the release path no longer needs them; never restore automatic fallback.
+
+### R8e — v1 release candidate
+
+- [ ] Freeze Pi tool/schema/Skill semantics, installation documentation and runwatch protocol compatibility expectations.
+- [ ] Re-run unit, live-bridge, real-provider, remote-HPC, local-Process and endurance gates from the supported release/install layout before tagging v1.
+
+### Post-v1 AgentAdapter policy
+
+The Codex experiment in runwatch proved that a second agent can use the durable continuation model, but it is not current pi-runs scope. After v1, other agents should receive independent Agent Integration projects (for example a future `codex-runs`) rather than being added to pi-runs or further embedded into runwatch. No such project is created during R8.
 
 ## Legacy compatibility debt
 
