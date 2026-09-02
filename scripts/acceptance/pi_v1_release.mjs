@@ -538,8 +538,22 @@ function parseArgs(argv) {
   return result;
 }
 
+export function piPackageRootFromListOutput(output, packageNeedle) {
+  const lines = String(output || "").split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes(packageNeedle)) continue;
+    for (let next = index + 1; next < Math.min(lines.length, index + 4); next += 1) {
+      const candidate = lines[next].trim();
+      if (!candidate) continue;
+      if (/^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith("/")) return candidate;
+      break;
+    }
+  }
+  return null;
+}
+
 export function preflightPiSshTools(options) {
-  if (options.mode !== "slurm") return;
+  if (options.mode !== "slurm") return null;
   const launch = piCommand(["list"], options.piExecutable);
   const probe = spawnSync(launch.executable, launch.args, {
     cwd: process.cwd(),
@@ -548,9 +562,21 @@ export function preflightPiSshTools(options) {
     timeout: 30_000,
   });
   if (probe.status !== 0) throw new Error(`Pi package preflight failed with exit ${probe.status}`);
-  if (!`${probe.stdout}\n${probe.stderr}`.includes("pi-ssh-tools")) {
+  const output = `${probe.stdout}\n${probe.stderr}`;
+  const packageRoot = piPackageRootFromListOutput(output, "pi-ssh-tools");
+  if (!packageRoot) {
     throw new Error("remote release acceptance requires pi-ssh-tools to be installed in Pi");
   }
+  const packageJson = join(packageRoot, "package.json");
+  if (!existsSync(packageJson)) throw new Error(`pi-ssh-tools package metadata missing: ${packageJson}`);
+  const metadata = JSON.parse(readFileSync(packageJson, "utf8"));
+  const entry = metadata?.pi?.extensions?.[0];
+  if (typeof entry !== "string" || !entry) {
+    throw new Error(`pi-ssh-tools package does not declare a Pi extension: ${packageJson}`);
+  }
+  const extension = resolve(packageRoot, entry);
+  if (!existsSync(extension)) throw new Error(`pi-ssh-tools extension missing: ${extension}`);
+  return extension;
 }
 
 export async function runAcceptance(options) {

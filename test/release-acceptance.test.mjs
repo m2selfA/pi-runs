@@ -8,6 +8,7 @@ import {
   buildSeedPrompt,
   inspectInitialEvents,
   inspectPersistedSession,
+  piPackageRootFromListOutput,
   waitForExit,
 } from "../scripts/acceptance/pi_v1_release.mjs";
 
@@ -21,6 +22,21 @@ function localSpec() {
     "20260902-test",
   );
 }
+
+test("Pi package list parser returns the installed pi-ssh-tools package root", () => {
+  const output = [
+    "User packages:",
+    "  git:github.com/m2selfA/pi-ssh-tools",
+    "    C:\\Users\\test-user\\.pi\\agent\\git\\github.com\\m2selfA\\pi-ssh-tools",
+    "  npm:other-package",
+    "    C:\\Users\\test-user\\.pi\\agent\\npm\\node_modules\\other-package",
+  ].join("\n");
+  assert.equal(
+    piPackageRootFromListOutput(output, "pi-ssh-tools"),
+    "C:\\Users\\test-user\\.pi\\agent\\git\\github.com\\m2selfA\\pi-ssh-tools",
+  );
+  assert.equal(piPackageRootFromListOutput(output, "missing-package"), null);
+});
 
 test("waitForExit clears and unreferences its timeout after a child exits", async () => {
   const child = new EventEmitter();

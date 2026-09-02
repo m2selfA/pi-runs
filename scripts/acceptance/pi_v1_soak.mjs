@@ -366,6 +366,11 @@ async function runExplicitRebindTurn(item, shared, timeoutMs) {
   ].join(" ");
   await writeFile(join(item.caseDir, "rebind-prompt.txt"), `${prompt}\n`, "utf8");
   const logs = openProcessLogs(item.caseDir, "pi-rebind");
+  const explicitExtensions = ["-e", shared.extension];
+  if (item.mode === "slurm") {
+    assert.ok(shared.piSshToolsExtension, "remote rebind acceptance requires an explicit pi-ssh-tools extension path");
+    explicitExtensions.push("-e", shared.piSshToolsExtension);
+  }
   const args = [
     "--no-extensions",
     "--no-context-files",
@@ -381,8 +386,7 @@ async function runExplicitRebindTurn(item, shared, timeoutMs) {
     "json",
     "--session",
     item.branchFault.session_file,
-    "-e",
-    shared.extension,
+    ...explicitExtensions,
     "-p",
     prompt,
   ];
@@ -897,7 +901,9 @@ async function runRound(options, shared, round) {
 }
 
 export async function runSoak(options) {
-  if (options.plan.modes.includes("slurm")) preflightPiSshTools({ mode: "slurm", piExecutable: options.piExecutable });
+  const piSshToolsExtension = options.plan.modes.includes("slurm")
+    ? preflightPiSshTools({ mode: "slurm", piExecutable: options.piExecutable })
+    : null;
   const nonce = safeNonce();
   const evidenceDir = resolve(options.evidenceRoot, `soak-${nonce}`);
   await mkdir(evidenceDir, { recursive: false });
@@ -925,6 +931,7 @@ export async function runSoak(options) {
     env,
     extension,
     piApiModule,
+    piSshToolsExtension,
     model: options.model,
     thinking: options.thinking,
     piExecutable: options.piExecutable,
@@ -969,6 +976,7 @@ export async function runSoak(options) {
       ssh_fault_every: options.plan.sshFaultEvery,
       ssh_fault_sec: options.plan.sshFaultSec,
       pi_api_module: piApiModule,
+      pi_ssh_tools_extension: piSshToolsExtension,
       rounds_completed: rounds.length,
       total_cases: rounds.reduce((sum, item) => sum + item.cases.length, 0),
       runwatch: {

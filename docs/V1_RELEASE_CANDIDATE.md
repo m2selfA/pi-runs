@@ -73,7 +73,7 @@ A real isolated cross-project smoke with a freshly rebuilt runwatch executable r
 
 The npm `files` allowlist ships only the active extension, active src, acceptance scripts, Skill/reference material and assets. `legacy/`, old systemd units, `pi-runs-wake`, old runner/store/wakeup code and legacy parser tests are Git history/reference only and must not enter the package.
 
-The latest dry run contains **23 files / 162,003 bytes unpacked**. The only added release-harness file is `scripts/acceptance/ssh_fault_relay.mjs`; legacy/runtime-retired surfaces remain excluded. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
+The latest dry run contains **23 files / 163,586 bytes unpacked**. Formal acceptance helpers remain inside the allowlist while legacy/runtime-retired surfaces stay excluded. Remote rebind keeps `--no-extensions` and explicitly resolves/loads only the installed `pi-ssh-tools` package alongside pi-runs, so remote verification does not depend on arbitrary user extensions. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
 
 ## Release gates
 
@@ -90,7 +90,8 @@ Already qualified:
 - focused completion-before-settlement crash recovery with one completion, one settlement and retry-safe recovery;
 - focused same-session sibling-branch `needs_rebind -> runs_rebind -> delivered` using real Pi SessionManager lineage and live two-phase settlement;
 - focused real hpc.example SSH transport cut/recovery on Job <job-id>: `fresh -> unreachable -> fresh`, same JobID, then exactly-once offline continuation;
-- explicit real-Pi live failure regression: completion remains durable, no false settlement is written, and Delivery is retried rather than acked delivered.
+- explicit real-Pi live failure regression: completion remains durable, no false settlement is written, and Delivery is retried rather than acked delivered;
+- current-HEAD packaged repeat qualification: 456.473 s, 2 rounds / 4 real cases, concurrent Local + Slurm, two resident serve restarts, two real same-session rebind recoveries, Slurm Job <job-id>, and exactly-once final continuation evidence. This increases repetition evidence but is intentionally not counted as the multi-hour gate.
 
 Still blocking a v1 tag:
 
