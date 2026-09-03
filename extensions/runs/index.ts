@@ -712,9 +712,9 @@ export default function (pi: ExtensionAPI) {
               ? "binding_persisted_delivery_pending"
               : "pending_agent_binding",
         note: rec.continuation_armed || offlineContinuationArmed
-          ? "offline-capable continuation is armed: the current Pi process may exit completely; runwatch will resume the exact saved Pi session through an RPC worker after terminal completion if no live Pi lease exists"
+          ? "offline-capable continuation is armed: a detached workflow may let the current Pi process exit completely; if the next reasoning step depends on this Run, runs_wait may stay attached instead"
           : liveContinuationArmed
-            ? "live Pi continuation is armed: end the current turn and leave Pi running; terminal completion will arrive as a follow-up"
+            ? "live Pi continuation is armed: if the workflow detaches, leave Pi running for terminal follow-up; if the next reasoning step depends on this Run, runs_wait may stay attached instead"
             : rec.continuation_binding_persisted
               ? "durable Pi session/branch binding is stored, but no live/offline continuation capability is currently armed"
               : "durable Run monitoring is active, but no Pi continuation binding was stored",
@@ -727,9 +727,9 @@ export default function (pi: ExtensionAPI) {
     label: "Wait for run",
     description:
       "Foreground observer for an existing durable Run. With timeout_ms omitted it stays attached until the requested condition, even for very long jobs, while using bounded reconnectable IPC slices. Explicit timeout or Escape/abort detaches only this watcher; cancelling the scientific Run requires runs_cancel.",
-    promptSnippet: "Stay attached to a durable Run when the user explicitly wants run-to-completion observation",
+    promptSnippet: "Stay attached to a durable Run when the current reasoning step depends on its result",
     promptGuidelines: [
-      "Long scientific Runs still default to runs_submit plus durable continuation so Pi may exit completely.",
+      "Every long Run starts with runs_submit so runwatch owns it durably; choose foreground attachment versus durable continuation by dependency, not by job duration.",
       "Use runs_wait when the next reasoning step depends on this Run. Omit timeout_ms for the familiar run-to-completion experience even when the Run may take hours; transient runwatch transport loss is surfaced as reconnecting rather than cancelling the Run.",
       "A runs_wait timeout or Escape/abort only detaches the foreground watcher. Never claim that the Run was cancelled unless runs_cancel was explicitly called and runwatch later confirms terminal cancellation.",
     ],
@@ -743,22 +743,28 @@ export default function (pi: ExtensionAPI) {
       interval_ms: Type.Optional(Type.Number({ description: "Progress-update slice in milliseconds. Default 5000; clamped to 1000..30000." })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
+      if (activeWatcher) {
+        const currentLabel = displayNameForRun(activeWatcher.lastRun || { run_id: activeWatcher.runId });
+        throw new Error(
+          `runs_wait ${params.run_id}: ${currentLabel} (${activeWatcher.runId}) is already the foreground watcher in this Pi session; use /runs detach before attaching another Run`,
+        );
+      }
       const watcherController = new AbortController();
       const combined = combineAbortSignals(signal, watcherController.signal);
-      let initialRun: any | undefined;
-      try {
-        initialRun = await statusRun(params.run_id, { signal, timeout_ms: 900 });
-      } catch {
-        // The sliced foreground watcher owns reconnect semantics; a failed preview must not block it.
-      }
       activeWatcher = {
         runId: params.run_id,
         state: "observing",
         startedAt: Date.now(),
         elapsedMs: 0,
         controller: watcherController,
-        lastRun: initialRun,
       };
+      let initialRun: any | undefined;
+      try {
+        initialRun = await statusRun(params.run_id, { signal, timeout_ms: 900 });
+        if (activeWatcher?.runId === params.run_id) activeWatcher.lastRun = initialRun;
+      } catch {
+        // The sliced foreground watcher owns reconnect semantics; a failed preview must not block it.
+      }
       const initialLabel = displayNameForRun(initialRun || { run_id: params.run_id });
       onUpdate?.({
         content: [{ type: "text", text: `${initialLabel}: attached; waiting for ${params.until || "terminal"}. Escape or /runs detach stops only this watcher without cancelling the durable Run.` }],

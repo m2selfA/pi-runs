@@ -51,14 +51,19 @@ function looksOpaque(value) {
   return false;
 }
 
-function looksPathOrUrl(value) {
+function looksAbsolutePathOrUrl(value) {
   const raw = String(value || "").trim();
   return (
     /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ||
     /^[a-z]:[\\/]/i.test(raw) ||
     /^[/~]/.test(raw) ||
-    raw.includes("\\")
+    /^\\\\/.test(raw)
   );
+}
+
+function looksPathOrUrl(value) {
+  const raw = String(value || "").trim();
+  return looksAbsolutePathOrUrl(raw) || raw.includes("\\");
 }
 
 export function sanitizeDisplayName(value) {
@@ -90,9 +95,17 @@ function stripExtension(value) {
 }
 
 function safeTokenStem(value) {
+  if (looksAbsolutePathOrUrl(value)) return undefined;
   const leaf = stripExtension(leafToken(value));
   if (!leaf || looksOpaque(leaf)) return undefined;
   return sanitizeDisplayName(leaf);
+}
+
+function safeScriptStem(value) {
+  const raw = String(value || "").trim();
+  if (looksAbsolutePathOrUrl(raw)) return undefined;
+  if (!/\.(?:py|pyw|js|mjs|cjs|ts|tsx|jsx|sh|ps1|bat|cmd)$/i.test(raw)) return undefined;
+  return safeTokenStem(raw);
 }
 
 function firstNonOption(tokens, start = 1) {
@@ -114,45 +127,47 @@ export function semanticDisplayName(command) {
   if (!executable || looksOpaque(executable)) return undefined;
 
   if (["cargo"].includes(executable)) {
-    const action = firstNonOption(tokens)?.token;
-    const safeAction = sanitizeDisplayName(action);
-    return safeAction ? `cargo-${safeAction}` : "cargo";
+    const knownActions = new Set([
+      "bench", "build", "check", "clean", "clippy", "doc", "fetch", "fmt",
+      "install", "publish", "run", "test", "update",
+    ]);
+    const action = String(tokens[1] || "").toLowerCase();
+    return knownActions.has(action) ? `cargo-${action}` : "cargo";
   }
 
   if (["npm", "pnpm", "yarn"].includes(executable)) {
-    const first = firstNonOption(tokens)?.token;
-    if (!first) return executable;
-    if (first.toLowerCase() === "run") {
-      const script = firstNonOption(tokens, 2)?.token;
-      return sanitizeDisplayName(script) || `${executable}-run`;
+    const knownActions = new Set([
+      "add", "build", "ci", "exec", "install", "lint", "pack", "publish", "start", "test", "update",
+    ]);
+    const action = String(tokens[1] || "").toLowerCase();
+    if (action === "run") {
+      const script = tokens[2];
+      return script && !script.startsWith("-") ? sanitizeDisplayName(script) || `${executable}-run` : `${executable}-run`;
     }
-    const action = sanitizeDisplayName(first);
-    return action ? `${executable}-${action}` : executable;
+    return knownActions.has(action) ? `${executable}-${action}` : executable;
   }
 
   if (["pytest", "py.test"].includes(executable)) {
-    const target = firstNonOption(tokens)?.token;
-    const stem = target && !looksPathOrUrl(target) ? safeTokenStem(target.split("::")[0]) : undefined;
+    const target = tokens[1];
+    const stem = target && !target.startsWith("-") ? safeScriptStem(target.split("::")[0]) : undefined;
     return stem ? `test-${stem}` : "pytest";
   }
 
   if (GENERIC_LAUNCHERS.has(executable)) {
-    for (let i = 1; i < tokens.length; i += 1) {
-      const token = tokens[i];
-      const lower = token.toLowerCase();
-      if (SHELL_COMMAND_OPTIONS.has(lower)) return undefined;
-      if (lower === "-m" && tokens[i + 1]) {
-        const moduleStem = safeTokenStem(tokens[i + 1].split(".").at(-1));
-        return moduleStem;
-      }
-      if (token.startsWith("-")) continue;
-      const stem = safeTokenStem(token);
-      if (stem && !GENERIC_LAUNCHERS.has(stem)) return stem;
+    const first = tokens[1];
+    if (!first) return undefined;
+    const lower = first.toLowerCase();
+    if (SHELL_COMMAND_OPTIONS.has(lower)) return undefined;
+    if (lower === "-m" && tokens[2]) {
+      const module = tokens[2];
+      if (module.startsWith("-") || looksPathOrUrl(module) || looksOpaque(module)) return undefined;
+      return sanitizeDisplayName(module.split(".").at(-1));
     }
-    return undefined;
+    if (first.startsWith("-")) return undefined;
+    return safeScriptStem(first);
   }
 
-  return safeTokenStem(executable);
+  return safeTokenStem(tokens[0]);
 }
 
 export function mnemonicDisplayName(runId, offset = 0) {

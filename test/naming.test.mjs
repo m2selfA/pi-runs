@@ -36,6 +36,38 @@ test("unsafe or opaque naming input falls back to deterministic mnemonic", () =>
   assert.doesNotMatch(result.name, /secret|example|token/i);
 });
 
+test("automatic names never copy basename material from absolute command paths", () => {
+  const unixRun = resolveRunDisplayName({
+    command: "python /private/patient-alpha/refine_secret.py --token VERYSECRET",
+    runId: "absolute-script-run",
+  });
+  assert.equal(unixRun.source, "mnemonic");
+  assert.doesNotMatch(unixRun.name, /patient|refine|secret/i);
+
+  const exeRun = resolveRunDisplayName({
+    command: "/opt/private-analysis-tool --token VERYSECRET",
+    runId: "absolute-executable-run",
+  });
+  assert.equal(exeRun.source, "mnemonic");
+  assert.doesNotMatch(exeRun.name, /private|analysis|tool|secret/i);
+});
+
+test("automatic naming never scans interpreter option values or trailing arguments for a label", () => {
+  const optionValue = resolveRunDisplayName({
+    command: "python --config secret_payload.py public_script.py",
+    runId: "interpreter-option-run",
+  });
+  assert.equal(optionValue.source, "mnemonic");
+  assert.doesNotMatch(optionValue.name, /secret|payload|public|script/i);
+
+  const trailing = resolveRunDisplayName({
+    command: "python public_script.py VERYSECRET",
+    runId: "interpreter-trailing-run",
+  });
+  assert.equal(trailing.name, "public-script");
+  assert.doesNotMatch(trailing.name, /secret/i);
+});
+
 test("generated names are stable for the same Run identity", () => {
   const first = mnemonicDisplayName("stable-run-1");
   const second = mnemonicDisplayName("stable-run-1");
