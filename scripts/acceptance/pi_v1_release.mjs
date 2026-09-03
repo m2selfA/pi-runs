@@ -119,16 +119,20 @@ export function buildAcceptanceSpec(options, nonce) {
   }
   const workdir = options.workdir ? resolve(options.workdir) : resolve(options.evidenceDir);
   if (!isAbsolute(workdir)) throw new Error("local-process workdir must be absolute");
-  const markerPath = resolve(options.evidenceDir, `local-marker-${nonce}.txt`);
+  const markerName = `local-marker-${nonce}.txt`;
+  const markerPath = options.localMarkerInWorkdir
+    ? resolve(workdir, markerName)
+    : resolve(options.evidenceDir, markerName);
+  const markerTarget = options.localMarkerInWorkdir ? markerName : markerPath;
   const command = [
     `Start-Sleep -Seconds ${delaySec}`,
-    `[IO.File]::WriteAllText(${quotePowerShellLiteral(markerPath)}, ${quotePowerShellLiteral(token)}, [Text.UTF8Encoding]::new($false))`,
+    `[IO.File]::WriteAllText(${quotePowerShellLiteral(markerTarget)}, ${quotePowerShellLiteral(token)}, [Text.UTF8Encoding]::new($false))`,
   ].join("; ");
   return {
     mode,
     runId,
     token,
-    markerName: basename(markerPath),
+    markerName,
     delaySec,
     markerPath,
     submitArgs: {

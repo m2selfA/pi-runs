@@ -86,6 +86,21 @@ test("release prompt freezes initial handoff and future verification contract", 
     "isolated-workdir",
   );
   assert.equal(isolated.submitArgs.workdir, resolve("acceptance-output", "unit-local"));
+  const shortWorkdir = resolve("acceptance-output", "local-workspace");
+  const longEvidenceDir = resolve("acceptance-output", "soak-public-evidence", "round-0005", "local");
+  const soakLocal = buildAcceptanceSpec(
+    {
+      mode: "local-process",
+      workdir: shortWorkdir,
+      evidenceDir: longEvidenceDir,
+      localMarkerInWorkdir: true,
+    },
+    "short-local-marker",
+  );
+  assert.equal(soakLocal.submitArgs.workdir, shortWorkdir);
+  assert.equal(soakLocal.markerPath, resolve(shortWorkdir, soakLocal.markerName));
+  assert.equal(soakLocal.submitArgs.command.includes(longEvidenceDir), false);
+  assert.match(soakLocal.submitArgs.command, new RegExp(soakLocal.markerName.replaceAll(".", "\\.")));
   const spec = localSpec();
   const prompt = buildSeedPrompt(spec);
   assert.equal(prompt.includes("\n"), false, "Windows Volta/Pi launch requires a single-line acceptance prompt");

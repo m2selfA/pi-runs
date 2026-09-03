@@ -814,8 +814,9 @@ async function seedCase(options, shared, round, mode) {
     {
       mode,
       host: options.host,
-      workdir: mode === "slurm" ? options.workdir : undefined,
+      workdir: mode === "slurm" ? options.workdir : shared.localWorkdir,
       evidenceDir: caseDir,
+      localMarkerInWorkdir: mode !== "slurm",
       delaySec: options.plan.runDelaySec,
     },
     nonce,
@@ -1256,9 +1257,12 @@ export async function runSoak(options) {
   const runwatchEnv = sshFault
     ? { ...env, RUNWATCH_SSH_CONFIG: sshFault.configPath }
     : env;
+  const localWorkdir = resolve("acceptance-output", "local-workspace");
+  await mkdir(localWorkdir, { recursive: true });
   const shared = {
     nonce,
     evidenceDir,
+    localWorkdir,
     runwatchDataDir,
     endpoint,
     env,
