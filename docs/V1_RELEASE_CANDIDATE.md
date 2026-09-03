@@ -120,6 +120,7 @@ Additional cleanup qualification:
 Still blocking a v1 tag:
 
 - final authority #5 `<soak-evidence>` is now active from cleanup-fixed `<opaque-id>`. Round 1 passed Local `local:<handle>` + hpc.example Slurm Job <job-id> across serve <pid> -> <pid>, with Delivery/Invocation/completion/settlement all exactly once and the exact Local/Slurm result-inspection sequences.
+- authority #5 round 2 also passed: Local `local:<handle>` had zero wrong-branch completion/settlement, exactly one `runs_rebind`, Delivery attempt 2 and final completion/settlement=1/1; hpc.example Job <job-id> remained the same running JobID across isolated SSH `fresh -> unreachable(transport, Channel send error) -> fresh(scheduler)` and then settled exactly once. serve <pid> -> <pid>.
 - continue/resume only authority #5 under the same 7200 s target and fault cadence until its read-only report returns `v1_endurance.qualified=true`. All earlier authorities remain preserved and do not count toward this final authority.
 
 No formal gate may require a human `continue` message.
