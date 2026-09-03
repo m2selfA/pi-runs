@@ -135,4 +135,6 @@ Still blocking a v1 tag:
 
 - authority #7 round 2 passed the first real SSH + branch-rebind pair: Local `local:<handle>`, hpc.example Job <job-id>, scheduled serve <pid> -> <pid>; the round fully verified and advanced to round 3. Current authority coverage therefore includes restart repetition plus SSH=1/rebind=1; round 3 is exercising the first settlement-crash recovery.
 
+- authority #7 segment 1 closed cleanly at **2176.025 s / 3 rounds / 6 cases**. Round 3 passed the first completion-before-settlement recovery: Local `local:<handle>` hit completion=1/settlement=0 before isolated serve <pid> -> <pid>, then recovered with attempts=2/invocations=2 and one final settlement; Job <job-id> also survived the global crash exactly once. Current coverage is restart=3, SSH=1, rebind=1, settlement-crash=1 with zero dirty segments. Resume only this authority.
+
 No formal gate may require a human `continue` message.
