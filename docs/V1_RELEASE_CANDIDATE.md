@@ -119,6 +119,7 @@ Additional cleanup qualification:
 
 Still blocking a v1 tag:
 
-- start the final frozen formal endurance authority from the cleanup-fixed acceptance tree and run/resume it under the same 7200 s target and fault cadence until the read-only report returns `v1_endurance.qualified=true`. All earlier authorities remain preserved; only clean segments from this final authority may count.
+- final authority #5 `<soak-evidence>` is now active from cleanup-fixed `<opaque-id>`. Round 1 passed Local `local:<handle>` + hpc.example Slurm Job <job-id> across serve <pid> -> <pid>, with Delivery/Invocation/completion/settlement all exactly once and the exact Local/Slurm result-inspection sequences.
+- continue/resume only authority #5 under the same 7200 s target and fault cadence until its read-only report returns `v1_endurance.qualified=true`. All earlier authorities remain preserved and do not count toward this final authority.
 
 No formal gate may require a human `continue` message.
