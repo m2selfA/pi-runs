@@ -133,4 +133,6 @@ Still blocking a v1 tag:
 
 - formal authority #7 `<soak-evidence>` is now active from `<opaque-id>`, frozen contract-tree SHA-256 `<sha256>`. Round 1 passed the full 600-second mixed Local + Slurm workload: Local `local:<handle>`, Job <job-id>, serve <pid> -> <pid>, both final exactly-once inspectors completed and round 2 started. Continue only this authority until read-only qualification is true.
 
+- authority #7 round 2 passed the first real SSH + branch-rebind pair: Local `local:<handle>`, hpc.example Job <job-id>, scheduled serve <pid> -> <pid>; the round fully verified and advanced to round 3. Current authority coverage therefore includes restart repetition plus SSH=1/rebind=1; round 3 is exercising the first settlement-crash recovery.
+
 No formal gate may require a human `continue` message.
