@@ -109,9 +109,11 @@ Additional formal evidence:
 
 - formal authority #3 `<soak-evidence>` is preserved as failed/non-resumable. Round 1 passed Local + Slurm Job <job-id> across serve <pid> -> <pid> with exactly-once durable continuation. Round 2 then completed the Local branch-rebind durable path and exact marker-file read, but the real provider copied the verified token incorrectly in its terminal free-text acknowledgement by omitting `<opaque-id>`; the current verifier requires exact equality of that assistant string and therefore failed segment 1 after **1347.466 s**. No failed-segment time is credited. This failure does not justify changing DB/session evidence or accepting the old authority in place.
 
+- the verifier now separates deterministic durability evidence from redundant LLM copying. Exact token verification remains authoritative in the successful `read`/`ssh_read` tool result; completion/settlement exactly-once, verification-tool allowlist/count/order, no resubmit/polling, and one final `stop` acknowledgement bound to the completed Run remain hard gates. The acknowledgement text is preserved in evidence and may expose an imperfect copied token without overriding the exact tool-result token. Regression covers the authority-#3 copy error, wrong-Run acknowledgement rejection and reordered-tool rejection. Focused release tests are **6/6** and default tests are **53 passed / 0 failed / 1 skipped** with the real Pi loader passing.
+- a read-only replay of authority #3's actual round-2 session now verifies completion=1, settlement=1 and `runs_status/runs_logs/read` while explicitly recording that the observed acknowledgement differs from the canonical requested marker (`success_marker_exact=false`). No failed evidence was rewritten.
+
 Still blocking a v1 tag:
 
-- harden the acceptance verifier so durability qualification is authoritative on exact tool-result token verification plus the already-frozen exactly-once Delivery/Invocation/completion/settlement and verification-tool sequence, while still requiring one terminal Run-bound success acknowledgement without making byte-perfect LLM copying of an already verified token a durability invariant; regression-test the observed copy-error shape.
-- after that verifier change, start a new frozen formal endurance authority and run it until its read-only report returns `v1_endurance.qualified=true`. All prior failed authorities remain preserved and non-resumable by design.
+- start a new frozen formal endurance authority from the hardened verifier tree and run it until its read-only report returns `v1_endurance.qualified=true`. All prior failed authorities remain preserved and non-resumable by design.
 
 No formal gate may require a human `continue` message.

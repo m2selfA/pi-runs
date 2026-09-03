@@ -179,7 +179,7 @@ test("initial event inspection requires exact doctor, submit arguments, armed co
   assert.throws(() => inspectInitialEvents(extraTool, spec), /must not call tools other than/);
 });
 
-test("persisted session inspection enforces exactly-once completion, settlement, tools, and final marker", () => {
+test("persisted session inspection enforces exactly-once completion, settlement, tools, and terminal Run acknowledgement", () => {
   const spec = localSpec();
   const deliveryId = `${spec.runId}:a1:terminal`;
   const success = `R8B_RELEASE_OK:${spec.runId}:${spec.token}`;
@@ -252,4 +252,54 @@ test("persisted session inspection enforces exactly-once completion, settlement,
   });
   const retried = inspectPersistedSession(retryRows, spec, deliveryId);
   assert.equal(retried.verification_tools.filter((name) => name === "read").length, 2);
+
+  const providerCopyError = `R8B_RELEASE_OK:${spec.runId}:R8B_TOKEN_copy-error`;
+  const copyErrorRows = rows.map((row) => {
+    if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
+    if (row.message.content?.[0]?.type !== "text" || row.message.content[0].text !== success) return row;
+    return {
+      ...row,
+      message: {
+        ...row.message,
+        content: [{ type: "text", text: providerCopyError }],
+      },
+    };
+  });
+  const copyError = inspectPersistedSession(copyErrorRows, spec, deliveryId);
+  assert.equal(copyError.success_marker, providerCopyError);
+  assert.equal(copyError.success_marker_exact, false);
+  assert.equal(copyError.expected_success_marker, success);
+
+  const wrongRunRows = rows.map((row) => {
+    if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
+    if (row.message.content?.[0]?.type !== "text" || row.message.content[0].text !== success) return row;
+    return {
+      ...row,
+      message: {
+        ...row.message,
+        content: [{ type: "text", text: `R8B_RELEASE_OK:wrong-run:${spec.token}` }],
+      },
+    };
+  });
+  assert.throws(
+    () => inspectPersistedSession(wrongRunRows, spec, deliveryId),
+    /must be bound to the completed Run/,
+  );
+
+  const reorderedTools = rows.map((row) => {
+    if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
+    const calls = row.message.content;
+    if (!Array.isArray(calls) || calls.length !== 3 || calls[0]?.name !== "runs_status") return row;
+    return {
+      ...row,
+      message: {
+        ...row.message,
+        content: [calls[1], calls[0], calls[2]],
+      },
+    };
+  });
+  assert.throws(
+    () => inspectPersistedSession(reorderedTools, spec, deliveryId),
+    /must call verification tools in order/,
+  );
 });

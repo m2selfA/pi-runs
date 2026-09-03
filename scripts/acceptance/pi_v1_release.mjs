@@ -310,6 +310,15 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
   }
   const readCalls = toolCalls.filter((call) => call.name === readTool);
   assert.ok(readCalls.length >= 1, `offline continuation must call ${readTool} at least once`);
+  let previousVerificationIndex = -1;
+  for (const required of spec.verificationTools) {
+    const verificationIndex = toolNames.indexOf(required);
+    assert.ok(
+      verificationIndex > previousVerificationIndex,
+      `offline continuation must call verification tools in order: ${spec.verificationTools.join(" -> ")}`,
+    );
+    previousVerificationIndex = verificationIndex;
+  }
   assert.equal(toolNames.filter((name) => name === "runs_submit").length, 0, "offline continuation must never resubmit");
   assert.equal(toolNames.filter((name) => name === "runs_wait").length, 0, "offline continuation must not poll with runs_wait");
 
@@ -344,20 +353,49 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
     `${readTool} must successfully read the exact acceptance token at least once`,
   );
 
-  const successMarker = `R8B_RELEASE_OK:${spec.runId}:${spec.token}`;
+  const expectedSuccessMarker = `R8B_RELEASE_OK:${spec.runId}:${spec.token}`;
+  const releaseAckPrefix = `R8B_RELEASE_OK:${spec.runId}:`;
   const assistantMessages = afterCompletion
     .filter((row) => row?.type === "message" && row?.message?.role === "assistant")
     .map((row) => row.message);
-  const exactSuccesses = assistantMessages.filter((message) => extractAssistantText(message) === successMarker);
-  assert.equal(exactSuccesses.length, 1, "offline continuation must persist exactly one release success marker");
-  assert.equal(exactSuccesses[0].stopReason, "stop", "release success marker must be the terminal assistant stop");
+  const releaseAcknowledgements = assistantMessages.filter((message) =>
+    extractAssistantText(message).startsWith("R8B_RELEASE_OK:"),
+  );
+  assert.equal(
+    releaseAcknowledgements.length,
+    1,
+    "offline continuation must persist exactly one release success acknowledgement",
+  );
+  const releaseAcknowledgement = releaseAcknowledgements[0];
+  const acknowledgementText = extractAssistantText(releaseAcknowledgement);
+  assert.ok(
+    acknowledgementText.startsWith(releaseAckPrefix),
+    "release success acknowledgement must be bound to the completed Run",
+  );
+  const copiedToken = acknowledgementText.slice(releaseAckPrefix.length);
+  assert.ok(
+    copiedToken.length > 0 && !/\s/.test(copiedToken),
+    "release success acknowledgement must contain one non-empty copied token field",
+  );
+  assert.equal(
+    releaseAcknowledgement.stopReason,
+    "stop",
+    "release success acknowledgement must be the terminal assistant stop",
+  );
+  assert.equal(
+    assistantMessages.at(-1),
+    releaseAcknowledgement,
+    "release success acknowledgement must be the final assistant message after completion",
+  );
 
   return {
     session_id: header.id,
     completion_count: completionIndexes.length,
     settlement_count: settledIndexes.length,
     verification_tools: toolNames,
-    success_marker: successMarker,
+    success_marker: acknowledgementText,
+    expected_success_marker: expectedSuccessMarker,
+    success_marker_exact: acknowledgementText === expectedSuccessMarker,
   };
 }
 
