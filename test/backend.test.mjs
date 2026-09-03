@@ -8,6 +8,7 @@ import {
   normalizeSubmitRequest,
   requestedBackend,
   submitCapability,
+  waitRun as waitBackendRun,
 } from "../src/backend.mjs";
 
 function env(value) {
@@ -165,6 +166,52 @@ test("remote auto and local-only Process misuse fail before backend selection", 
     () => normalizeSubmitRequest({ runner: "slurm", workdir: "/x" }, "C:/science"),
     /requires an explicit.*host alias/,
   );
+});
+
+test("foreground wait keeps endpoint transport overrides while backend discovery stays bounded", async () => {
+  const { createServer } = await import("node:net");
+  const endpoint =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-runs-wait-backend-${process.pid}-${Date.now()}`
+      : `/tmp/pi-runs-wait-backend-${process.pid}-${Date.now()}.sock`;
+  const server = createServer((socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      const result =
+        request.op === "hello"
+          ? {
+              protocol_version: 1,
+              service: "runwatchd",
+              storage: "sqlite-wal",
+              capabilities: ["hello", "wait_run"],
+            }
+          : request.op === "wait_run"
+            ? { run: { run_id: "r-backend-wait", status: "queued", runner: "slurm" } }
+            : undefined;
+      socket.end(`${JSON.stringify({ id: request.id, ok: Boolean(result), result, error: result ? undefined : `unexpected op ${request.op}` })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(endpoint, resolve);
+  });
+  try {
+    const run = await waitBackendRun("r-backend-wait", {
+      endpoint,
+      env: { PI_RUNS_BACKEND: "auto" },
+      timeout_ms: 0,
+      until: "terminal",
+    });
+    assert.equal(run.status, "queued");
+    assert.equal(run.wait_observation.outcome, "timeout");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("invalid backend is rejected", () => {

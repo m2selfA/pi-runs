@@ -17,7 +17,7 @@ Pi integration for durable **Runs** managed by runwatch. Submit long scientific 
 The current release target is deliberately limited to **Pi + pi-runs + runwatch**, with `pi-ssh-tools` providing Pi-online remote workspace access. The real Pi/provider/HPC continuation loop already works; current development is focused on installation/readiness, repeatable release acceptance, endurance testing and legacy retirement. Support for Codex or any other coding agent is deferred until this v1 path is complete and should live in a separate Agent Integration project rather than in pi-runs.
 The frozen v1 adapter/release contract is documented in `docs/V1_RELEASE_CANDIDATE.md`.
 
-`sbatch` / `bsub` / process launch succeeding only means work was submitted. Long scientific waits should be handed off durably instead of keeping Pi in a polling tool call.
+`sbatch` / `bsub` / process launch succeeding only means work was submitted. Unattended long scientific waits should be handed off durably instead of keeping Pi alive merely to poll; an explicit foreground run-to-completion request may stay attached with `runs_wait` without changing runwatch's ownership of the Run.
 
 ## Install
 
@@ -32,12 +32,14 @@ pi install /path/to/pi-runs
 |---|---|
 | `runs_doctor` | read-only Pi v1 readiness: runwatch protocol/service/storage/capabilities/backend selection |
 | `runs_submit` | durable hand-off; return `run_id` + execution status/handle |
-| `runs_wait` | short synchronous wait only |
+| `runs_wait` | foreground observer for an existing durable Run; explicit run-to-completion wait with progress, timeout/abort detach only |
 | `runs_status` | canonical runwatch snapshot; fails closed if the durable control plane is unavailable |
 | `runs_logs` | tail |
 | `runs_harvest` | record artifacts |
 | `runs_cancel` | durable scancel / bkill / Local Process cancellation request through runwatch |
 | `runs_rebind` | explicitly attach a branch-blocked completion to the current Pi session branch |
+
+`runs_wait` is an observation lifecycle, not a Run lifecycle. It defaults to a 30-second attachment, accepts `until=terminal|running`, emits progress on bounded slices (5 seconds by default), and caps one foreground attachment at 24 hours. A timeout or Escape/Abort ends only the watcher; the durable Run keeps executing until it reaches terminal state or `runs_cancel` is explicitly requested. For hours-to-days unattended work, `runs_submit` + durable continuation remains the default because Pi can exit completely.
 
 ## Pi v1 release acceptance
 

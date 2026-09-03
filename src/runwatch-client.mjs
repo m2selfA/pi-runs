@@ -5,6 +5,12 @@ import { randomUUID } from "node:crypto";
 
 const CLIENT_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 750;
+const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
+const DEFAULT_WAIT_UPDATE_INTERVAL_MS = 5_000;
+const MAX_WAIT_TIMEOUT_MS = 86_400_000;
+const MIN_WAIT_UPDATE_INTERVAL_MS = 1_000;
+const MAX_WAIT_UPDATE_INTERVAL_MS = 30_000;
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
 
 export function endpoint(env = process.env) {
   if (env.RUNWATCH_ENDPOINT) return env.RUNWATCH_ENDPOINT;
@@ -278,16 +284,86 @@ export async function rebindContinuation(runId, binding, options = {}) {
   return request("rebind_continuation", { run_id: runId, binding }, options);
 }
 
+export function normalizeWaitOptions(options = {}) {
+  const rawTimeout = options.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS;
+  const timeoutMs = Number(rawTimeout);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new Error(`invalid runs_wait timeout_ms=${rawTimeout}; expected a non-negative finite number`);
+  }
+
+  const rawInterval = options.interval_ms ?? DEFAULT_WAIT_UPDATE_INTERVAL_MS;
+  const intervalMs = Number(rawInterval);
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    throw new Error(`invalid runs_wait interval_ms=${rawInterval}; expected a positive finite number`);
+  }
+
+  const until = String(options.until ?? "terminal").trim().toLowerCase();
+  if (until !== "terminal" && until !== "running") {
+    throw new Error(`invalid runs_wait until=${until}; expected terminal or running`);
+  }
+
+  return {
+    timeoutMs: Math.min(MAX_WAIT_TIMEOUT_MS, Math.floor(timeoutMs)),
+    intervalMs: Math.min(
+      MAX_WAIT_UPDATE_INTERVAL_MS,
+      Math.max(MIN_WAIT_UPDATE_INTERVAL_MS, Math.floor(intervalMs)),
+    ),
+    until,
+  };
+}
+
+export function waitConditionMet(run, until = "terminal") {
+  const status = String(run?.status || "").toLowerCase();
+  if (TERMINAL_RUN_STATUSES.has(status)) return true;
+  return until === "running" && status === "running";
+}
+
 export async function waitRun(runId, options = {}) {
-  const waitMs = Math.max(0, Number(options.timeout_ms ?? 30_000));
-  const timeoutSec = Math.min(86_400, Math.ceil(waitMs / 1000));
-  const result = await request(
-    "wait_run",
-    { run_id: runId, timeout_sec: timeoutSec },
-    { ...options, timeout_ms: Math.max(2_000, waitMs + 2_000) },
-  );
-  if (!result?.run) throw new Error(`unknown run ${runId}`);
-  return result.run;
+  const { timeoutMs, intervalMs, until } = normalizeWaitOptions(options);
+  const startedAt = Date.now();
+  let iteration = 0;
+
+  while (true) {
+    const elapsedBeforeSlice = Math.max(0, Date.now() - startedAt);
+    const remainingMs = Math.max(0, timeoutMs - elapsedBeforeSlice);
+    const sliceMs = timeoutMs === 0 ? 0 : Math.min(intervalMs, remainingMs);
+    const timeoutSec =
+      sliceMs === 0 ? 0 : Math.min(86_400, Math.max(1, Math.ceil(sliceMs / 1000)));
+    const result = await request(
+      "wait_run",
+      { run_id: runId, timeout_sec: timeoutSec },
+      { ...options, timeout_ms: Math.max(2_000, sliceMs + 2_000) },
+    );
+    if (!result?.run) throw new Error(`unknown run ${runId}`);
+
+    iteration += 1;
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    const conditionMet = waitConditionMet(result.run, until);
+    const timedOut = timeoutMs === 0 || elapsedMs >= timeoutMs;
+    options.on_update?.({
+      run: result.run,
+      until,
+      condition_met: conditionMet,
+      elapsed_ms: elapsedMs,
+      timeout_ms: timeoutMs,
+      interval_ms: intervalMs,
+      iteration,
+    });
+
+    if (conditionMet || timedOut) {
+      return {
+        ...result.run,
+        wait_observation: {
+          until,
+          outcome: conditionMet ? "condition_met" : "timeout",
+          elapsed_ms: elapsedMs,
+          timeout_ms: timeoutMs,
+          interval_ms: intervalMs,
+          iterations: iteration,
+        },
+      };
+    }
+  }
 }
 
 function attachObservation(run, observation) {

@@ -109,7 +109,7 @@ Pi session 信息不应让模型手填。extension 在 `runs_submit` 时从 Pi c
 | `runs_logs` | bounded tail Run stdout/stderr / scheduler reason |
 | `runs_artifacts` / `runs_harvest` | artifact inventory，不替代科研分析 |
 | `runs_cancel` | 请求 cancel，由 daemon 最终确认 |
-| `runs_wait` | **仅短同步等待**，不是分钟到天的默认路径 |
+| `runs_wait` | foreground observer；可显式等待 `running` / terminal 并持续更新，但不拥有 Run 生命周期 |
 | `runs_rebind` | 将已有 Run 显式绑定到当前 Pi branch |
 | `runs_adopt` | 兼容性接管已有 scheduler job；不是正常 submit 路径 |
 
@@ -123,7 +123,19 @@ runs_submit
   -> armed: runwatch may relaunch exact Pi session after Pi exits
 ```
 
-只有用户明确要求同步等待，或预计很短的任务，才使用 `runs_wait`。
+默认仍只有在用户明确要求“等它跑到某个条件再继续”时使用 `runs_wait`；这类 foreground wait 可以持续数分钟甚至更久，并不是 Pi API 的禁区。关键边界不是“必须短”，而是 watcher 必须可观察、可 Abort/detach，并且 timeout/abort 绝不能变成 `runs_cancel`。无人值守、小时到天级任务仍优先结束当前 turn，让 durable continuation 接管。
+
+Foreground observation uses the existing daemon-owned `wait_run` snapshot capability in bounded slices rather than starting a second scheduler poller:
+
+```text
+runs_wait(until=terminal|running, timeout_ms=T)
+  -> wait_run slice
+  -> Pi onUpdate(status, handle, elapsed, condition)
+  -> repeat while attached
+  -> condition met: return snapshot
+  -> timeout / Escape / AbortSignal: detach watcher only
+  -> Run remains durable in runwatch
+```
 
 ## 与 pi-ssh-tools 的标准科研循环
 

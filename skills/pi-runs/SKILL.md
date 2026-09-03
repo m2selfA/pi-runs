@@ -13,7 +13,7 @@ Pi integration for durable **Runs**. `runwatchd` owns the long-lived Run lifecyc
 2. After `runs_submit` reports `continuation=armed`, end the current research turn; the Pi process may exit completely. runwatch owns the long wait and will resume the exact saved Pi session when the Run becomes terminal. If it reports `continuation=live_armed`, end the turn but leave Pi running.
 3. `continuation=binding_persisted_delivery_pending` means the Run/session binding is durable but neither live nor offline continuation is currently armed. Do not claim automatic resume yet.
 4. `sbatch` / `bsub` / process-launch success only means submitted/started. Scientific success is a later terminal state plus the relevant exit/result evidence.
-5. `runs_wait` is only for explicit **short synchronous waits**. Never use it as a substitute for durable continuation over minutes to days.
+5. `runs_wait` is a foreground observer for an existing durable Run. Use it when the user explicitly wants run-to-completion/condition waiting, including minutes-long waits. It must remain observable and cancellable; timeout or Escape/Abort only detaches the watcher and never cancels the Run. Do not use it as a substitute for durable continuation when Pi should be free to exit.
 6. For remote HPC, do not run heavy compute directly on login nodes; use Slurm/LSF scheduler-backed Runs. The remote `workdir` must be persistent shared storage visible at the same path from both the SSH login node and scheduler compute nodes; do not use node-local `/tmp`/scratch unless the cluster explicitly makes it shared. For long computation on the Windows workstation itself, omit `host` and use the durable runwatch Local Process path.
 7. When a Run belongs to a remote workspace and `ssh_activate` is available, explicitly activate the recorded `host:/cwd` before reading/editing scientific outputs. Never assume SSH mode persisted across Pi sessions.
 8. On continuation, inspect `runs_status` / `runs_logs`, then inspect expected artifacts and continue the scientific reasoning that created this Run. Do not resubmit merely because the previous Pi process disappeared.
@@ -28,14 +28,14 @@ Pi integration for durable **Runs**. `runwatchd` owns the long-lived Run lifecyc
 - `runs_logs` — bounded stdout/stderr and Run-level diagnostics.
 - `runs_harvest` / artifacts — inventory outputs after terminal.
 - `runs_cancel` — request cancellation.
-- `runs_wait` — short synchronous wait only.
+- `runs_wait` — foreground `until=terminal|running` observer with bounded progress updates; timeout/abort detaches only.
 - `runs_rebind` — bind an existing Run to the current Pi branch when supported.
 
 ## Typical long-job flow
 
 1. If remote, use `ssh_activate` plus `ssh_read` / `ssh_edit` / `ssh_bash` to prepare and quickly validate the workspace.
 2. Call `runs_submit` with command/resources/workspace information.
-3. Report the Run identity. If `continuation=armed`, stop actively waiting and Pi may exit. If `continuation=live_armed`, stop actively waiting but leave Pi running. If only the binding is persisted, report that limitation.
+3. Report the Run identity. By default, if `continuation=armed`, stop actively waiting and Pi may exit; if `continuation=live_armed`, stop actively waiting but leave Pi running. If the user explicitly asked to stay attached until the Run is running/terminal, `runs_wait` may be used as the foreground observer without transferring Run ownership away from runwatch. If only the binding is persisted, report that limitation.
 4. When resumed after terminal, call `runs_status` and `runs_logs`.
 5. Explicitly reactivate the recorded remote workspace if needed, inspect artifacts, and continue the research step.
 6. Submit another Run only if the scientific result actually requires another computation.

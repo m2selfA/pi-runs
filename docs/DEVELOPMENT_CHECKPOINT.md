@@ -22,7 +22,7 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 
 ## Frozen architecture decisions
 
-1. Long jobs default to `runs_submit -> continuation armed -> end turn`; long `runs_wait` is not the normal path.
+1. Long jobs default to `runs_submit -> continuation armed -> end turn`; foreground `runs_wait` is nevertheless a supported run-to-completion observer when waiting is explicitly part of the current task. The Run remains owned by runwatch, and watcher timeout/abort must never imply Run cancellation.
 2. Pi session identity is captured from extension context, not supplied by the model.
 3. Target continuation binding includes session file/id and origin leaf, not only session_id.
 4. The runwatch daemon is the target canonical backend; `~/.pi/runs`, local runners and wakeups are legacy migration paths.
@@ -46,6 +46,7 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 | R6 | origin-leaf lineage + `runs_rebind` | **real same-session `/tree` block + rebind recovery passed 2026-08-31** |
 | R7 | unattended/fault matrix with remote HPC | **completed — core crash/restart matrix 2026-08-31; formal multi-hour mixed Local+Slurm endurance closed by authority #11 on 2026-09-03** |
 | R8 | Pi-first v1 production closure | **completed 2026-09-03 — installation/readiness, real-Pi release gates, formal endurance, legacy retirement and final RC replay all green** |
+| P1 | Post-v0.1.0 foreground `runs_wait` semantics correction | **completed 2026-09-04 — observable sliced wait, detach-only abort/timeout, docs/Skill and Pi loader/default regressions green** |
 | R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred post-v1 — design only; no Codex/other-agent project work until runwatch + pi-runs v1 is complete** |
 
 ## P0 repository baseline — completed 2026-09-02
@@ -470,6 +471,21 @@ The functional Pi path is now release-qualified. R8 turned it into a repeatable 
 - [x] Authority #11 segment 3 closed cleanly at **2223.649 s / rounds 9–11 / 6 cases**, giving the formal current-binary authority **7800.220 s / 11 rounds / 22 real cases / 3 clean segments / 0 failed segments**. Machine `v1_endurance.qualified=true`; coverage is Local=11, Slurm=11, serve restart=11, SSH recovery=5, branch rebind recovery=5 and settlement-crash recovery=3, with every requirement `true` and `reasons=[]`. Formal multi-hour endurance blocker is closed; preserve `acceptance-output/<soak-evidence>` as the release authority and do not resume it again.
 - [x] Final RC replay passed on 2026-09-03 without changing the qualified runtime tree: runwatch `fmt/check/test` is green (**106 passed / 0 failed / 8 ignored**, existing `russh 0.54.5` future-incompat warning only); pi-runs `npm test` is **57 / 0 failed / 1 skipped**; explicit Pi loader exits 0; explicit real-Pi live bridge passes **1/1**; fixed-package Local evidence `<local-process-evidence>` passes packaged doctor/submit + exactly-once completion/settlement; hpc.example Slurm evidence `<slurm-evidence>` / Job <job-id> passes packaged doctor/submit + exact `runs_status/runs_logs/ssh_activate/ssh_read`; runwatch `xtask verify` returns `ok=true` for ZIP SHA-256 `<sha256>`; final read-only authority report remains `qualified=true`, **7800.220 s**, `dirty_segments=[]`.
 - [x] Release identity is consistent: `git diff --name-only <opaque-id>..HEAD` contains only the two release docs, so the current pi-runs HEAD has no runtime/acceptance-code drift from the authority #11 frozen tree. R8c and R8e are complete; next step is coordinated `v0.1.0` tag/release-note preparation, not new AgentAdapter or legacy work.
+
+### P1 — foreground `runs_wait` semantics correction — post-v0.1.0, 2026-09-04
+
+- [x] Corrected the post-release design rule after reviewing Pi core/official extension patterns and real community foreground subagent/wait tools: Pi does not forbid long tool calls. The actual invariant is that a long foreground tool must remain observable/cancellable and must not own the durable scientific workload.
+- [x] Kept `runwatchd` as the sole Run Lifecycle Authority and kept `runs_submit -> durable continuation` as the default for unattended hours-to-days work. No legacy backend, scheduler waiter, second ledger or new public tool was introduced; the local `v0.1.0` tag/release history is unchanged.
+- [x] Reworked active `runs_wait` into a sliced foreground observer using the existing daemon `wait_run` snapshot capability. Model-facing `timeout_ms` is now a total attachment budget (default 30 s, capped at 24 h), `interval_ms` controls bounded progress slices (default 5 s, clamped 1–30 s), and optional `until=terminal|running` provides an explicit observation condition. `running` is also satisfied by a terminal Run so fast jobs cannot slip past the condition.
+- [x] Wired Pi `onUpdate` so an attached watcher reports Run status, runner/job handle, elapsed time and the current wait condition. Tool guidance now states explicitly that Escape/Abort or timeout **detaches the watcher only**; scientific cancellation remains the separate explicit `runs_cancel` operation.
+- [x] Kept backend discovery bounded independently from the foreground wait budget, so a one-hour `runs_wait` cannot accidentally turn the runwatch `hello` capability probe into a one-hour IPC request.
+- [x] Added focused transport regressions: terminal wait returns `condition_met`; a queued→running foreground wait emits repeated updates and stops at the condition; timeout returns the still-queued Run with `wait_observation.outcome=timeout`; AbortSignal rejects the watcher request while the observed IPC trace contains **zero `cancel_run` operations**.
+- [x] Focused `node --test test/runwatch-client.test.mjs` — **8 passed / 0 failed**.
+- [x] Corrected active README/design/pain-points/Skill/AGENTS and runner references so none claim that Pi tool calls must be short. The docs now distinguish foreground observation lifetime from durable Run ownership and keep `runs_submit + continuation` as the unattended default.
+- [x] Full default regression after the final backend-boundary fix: `npm test` — **62 passed / 0 failed / 1 skipped** (63 total), including the real Pi extension-loader regression. Focused backend/client boundary tests are **19/19** and prove endpoint overrides survive capability discovery while discovery itself stays bounded.
+- [x] Explicit Pi loader replay (`volta.exe run pi --offline --no-extensions -e ./extensions/runs/index.ts --list-models`) exits **0** with the updated `runs_wait` TypeBox schema and `onUpdate` implementation.
+- [x] `npm pack --dry-run --json` still contains **23 files / 193,145 bytes unpacked** and no `legacy/` runtime surface. Package metadata remains `0.1.0` in the worktree for now; this P1 commit does not rewrite, move or retag the historical local `v0.1.0` release.
+- [x] P1 is closed as post-v0.1.0 work. `docs/V1_RELEASE_CANDIDATE.md`, `docs/RELEASE_NOTES_v0.1.0.md`, the v0.1.0 tag and its qualification evidence remain historical release records rather than being retroactively edited.
 
 ### Post-v1 AgentAdapter policy
 

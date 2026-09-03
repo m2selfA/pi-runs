@@ -203,7 +203,15 @@ export async function submitRun(req, options = {}) {
 
 export async function waitRun(runId, opts = {}, options = {}) {
   const merged = { ...opts, ...options };
-  const { module } = await selectedModule("wait_run", merged);
+  // Backend discovery is a short control-plane probe. Preserve transport overrides from either
+  // call layer, but do not let the model-facing foreground timeout turn hello into an hour-long IPC.
+  const selectionOptions = {
+    ...(merged.env ? { env: merged.env } : {}),
+    ...(merged.endpoint ? { endpoint: merged.endpoint } : {}),
+    ...(merged.signal ? { signal: merged.signal } : {}),
+    timeout_ms: 750,
+  };
+  const { module } = await selectedModule("wait_run", selectionOptions);
   return module.waitRun(runId, merged);
 }
 

@@ -54,11 +54,11 @@ Slurm / LSF JobID、PowerShell instance id 只是句柄。一次科研迭代还�
 
 没有本地账本，插件只能活在当前对话的上下文里。
 
-### 4. Agent 自己 `sleep` + `squeue` 既脆又贵，长 `runs_wait` 也没有真正解决生命周期问题
+### 4. Agent 自己 `sleep` + `squeue` 既脆又贵；foreground wait 也不能替代 durable 生命周期
 
 让模型在 bash 里轮询会烧掉上下文和工具配额、超时策略不统一，而且 Pi 一关循环就没了。
 
-即使把循环包装成一个默认等待一小时的 `runs_wait`，只要它仍运行在 Pi tool call 里，就仍然绑在 Pi 生命周期上。真正的默认长任务路径必须是：`runs_submit -> continuation armed -> 当前 turn 结束`，由独立 runwatchd 在后台观察；`runs_wait` 只保留给显式的短同步等待。
+把等待包装进 `runs_wait` 可以是合理的 foreground UX：例如用户明确要求“等这个测试跑完再汇报”，Pi 可以在一个可观察、可取消的 tool call 里附着数分钟甚至更久。但 watcher 仍绑定当前 Pi 进程，因此它**不能成为 durable ownership**。默认无人值守长任务仍应走 `runs_submit -> continuation armed -> 当前 turn 结束`，由独立 runwatchd 在后台观察；`runs_wait` 只是可随时 detach 的前台观察窗口，timeout/Escape/Abort 都不得取消 Run。
 
 ### 5. 只做 Slurm 不够
 

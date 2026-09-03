@@ -55,6 +55,37 @@ function jsonResult(data: unknown) {
   };
 }
 
+function waitProgressResult(runId: string, progress: any) {
+  const run = progress?.run;
+  const status = typeof run?.status === "string" ? run.status : "unknown";
+  const elapsedMs = Number(progress?.elapsed_ms || 0);
+  const elapsed = elapsedMs < 10_000 ? `${(elapsedMs / 1000).toFixed(1)}s` : `${Math.round(elapsedMs / 1000)}s`;
+  const handle = run?.job_id ? ` · ${run.runner || "job"} ${run.job_id}` : run?.runner ? ` · ${run.runner}` : "";
+  const condition = progress?.condition_met ? ` · ${progress.until} reached` : ` · waiting for ${progress?.until || "terminal"}`;
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Run ${runId}: ${status}${handle} · elapsed ${elapsed}${condition}. Escape/abort detaches this foreground wait; the durable Run is not cancelled.`,
+      },
+    ],
+    details: {
+      run_id: runId,
+      status,
+      runner: run?.runner,
+      job_id: run?.job_id,
+      wait: {
+        until: progress?.until,
+        condition_met: Boolean(progress?.condition_met),
+        elapsed_ms: elapsedMs,
+        timeout_ms: progress?.timeout_ms,
+        interval_ms: progress?.interval_ms,
+        iteration: progress?.iteration,
+      },
+    },
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   const offlineDelivery = offlineBootstrapPayload();
   const ownerInstanceId = process.env.RUNWATCH_OFFLINE_OWNER_INSTANCE_ID || randomUUID();
@@ -495,7 +526,7 @@ export default function (pi: ExtensionAPI) {
       "For remote Slurm/LSF work prepared with pi-ssh-tools, pass the ssh_status Host alias as host and its remote cwd as workdir; do not submit with ssh_bash and register afterwards.",
       "For remote scheduler Runs, choose a persistent shared workdir visible at the same path from login and compute nodes; never default to node-local /tmp or scratch merely because it exists on the SSH host.",
       "For long local Windows computation, omit host and use runner=process (or leave runner=auto); pi-runs defaults workdir to the current Pi cwd and runwatch owns the detached process lifecycle.",
-      "After durable continuation is armed, stop actively waiting; runs_wait is only for short synchronous waits.",
+      "After durable continuation is armed, normally end the turn instead of waiting. Use runs_wait when the user explicitly wants foreground run-to-completion observation; aborting that watcher never cancels the durable Run.",
     ],
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const options = { signal };
@@ -554,18 +585,35 @@ export default function (pi: ExtensionAPI) {
     name: "runs_wait",
     label: "Wait for run",
     description:
-      "Short synchronous wait for a Run. Do not use this for minutes-to-days scientific waits; durable continuation is the default long-job path.",
-    promptSnippet: "Wait briefly for a Run that is expected to finish soon",
+      "Foreground observer for an existing durable Run. It may stay attached for an explicit run-to-completion workflow, reports periodic progress, and can wait for running or terminal state. Timeout or Escape/abort detaches only this watcher; cancelling the scientific Run requires runs_cancel.",
+    promptSnippet: "Stay attached to a durable Run when the user explicitly wants run-to-completion observation",
     promptGuidelines: [
-      "Use runs_wait only for short synchronous waits. Never turn it into the watcher for a long scientific job.",
+      "Long scientific Runs still default to runs_submit plus durable continuation so Pi may exit completely.",
+      "Use runs_wait when foreground waiting is itself the requested workflow, including minutes-long run-to-completion checks; keep it observable and cancellable rather than silently polling.",
+      "A runs_wait timeout or Escape/abort only detaches the foreground watcher. Never claim that the Run was cancelled unless runs_cancel was explicitly called and runwatch later confirms terminal cancellation.",
     ],
     parameters: Type.Object({
       run_id: Type.String(),
-      timeout_ms: Type.Optional(Type.Number()),
-      interval_ms: Type.Optional(Type.Number()),
+      until: Type.Optional(Type.Union([
+        Type.Literal("terminal"),
+        Type.Literal("running"),
+      ], { description: "Condition to observe. running is also satisfied by a terminal state so fast Runs are not missed; default terminal." })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Total foreground attachment budget in milliseconds. Default 30000; capped at 24 hours. Timeout detaches the watcher and does not cancel the Run." })),
+      interval_ms: Type.Optional(Type.Number({ description: "Progress-update slice in milliseconds. Default 5000; clamped to 1000..30000." })),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const result = await waitRun(params.run_id, params, { signal });
+    async execute(_id, params, signal, onUpdate, ctx) {
+      onUpdate?.({
+        content: [{ type: "text", text: `Attached to Run ${params.run_id}; waiting for ${params.until || "terminal"}. Escape/abort detaches this watcher without cancelling the durable Run.` }],
+        details: { run_id: params.run_id, wait: { until: params.until || "terminal", attached: true } },
+      });
+      const result = await waitRun(
+        params.run_id,
+        {
+          ...params,
+          on_update: (progress: any) => onUpdate?.(waitProgressResult(params.run_id, progress)),
+        },
+        { signal },
+      );
       void refreshStatus(ctx);
       return jsonResult(result);
     },
