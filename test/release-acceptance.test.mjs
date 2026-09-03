@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import {
   buildAcceptanceSpec,
   buildSeedPrompt,
+  assertCleanReleaseDeliveryShape,
   inspectInitialEvents,
   inspectPersistedSession,
   piPackageRootFromListOutput,
@@ -225,6 +226,41 @@ test("initial event inspection requires exact doctor, submit arguments, armed co
     { type: "tool_execution_start", toolName: "runs_status", args: { run_id: spec.runId } },
   ];
   assert.throws(() => inspectInitialEvents(extraTool, spec), /must not call tools other than/);
+});
+
+test("clean release delivery shape permits one live/offline handoff retry but no repeated invocation", () => {
+  const direct = {
+    delivery: { state: "delivered", attempts: 1 },
+    invocation: { state: "completed" },
+    invocation_count: 1,
+  };
+  assert.deepEqual(assertCleanReleaseDeliveryShape(direct), {
+    attempts: 1,
+    handoff_retry_recovered: false,
+  });
+
+  const recovered = {
+    delivery: { state: "delivered", attempts: 2 },
+    invocation: { state: "completed" },
+    invocation_count: 1,
+  };
+  assert.deepEqual(assertCleanReleaseDeliveryShape(recovered), {
+    attempts: 2,
+    handoff_retry_recovered: true,
+  });
+
+  assert.throws(
+    () => assertCleanReleaseDeliveryShape({ ...recovered, delivery: { state: "delivered", attempts: 3 } }),
+    /only direct delivery or one live\/offline handoff retry/,
+  );
+  assert.throws(
+    () => assertCleanReleaseDeliveryShape({ ...recovered, invocation_count: 2 }),
+    /exactly one AgentInvocation/,
+  );
+  assert.throws(
+    () => assertCleanReleaseDeliveryShape({ ...recovered, delivery: { state: "retrying", attempts: 2 } }),
+    /delivered Delivery state/,
+  );
 });
 
 test("persisted session inspection enforces exactly-once completion, settlement, tools, and terminal Run acknowledgement", () => {

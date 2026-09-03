@@ -415,6 +415,21 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
   };
 }
 
+export function assertCleanReleaseDeliveryShape(durable) {
+  assert.equal(durable?.delivery?.state, "delivered", "clean release gate requires delivered Delivery state");
+  assert.equal(durable?.invocation?.state, "completed", "clean release gate requires completed AgentInvocation");
+  assert.equal(durable?.invocation_count, 1, "clean release gate requires exactly one AgentInvocation");
+  const attempts = Number(durable?.delivery?.attempts);
+  assert.ok(
+    attempts === 1 || attempts === 2,
+    `clean release gate permits only direct delivery or one live/offline handoff retry, got ${attempts} attempts`,
+  );
+  return {
+    attempts,
+    handoff_retry_recovered: attempts === 2,
+  };
+}
+
 export function readJsonLines(path) {
   const metadata = statSync(path);
   if (metadata.size > MAX_EVIDENCE_FILE_BYTES) {
@@ -760,8 +775,7 @@ export async function runAcceptance(options) {
       `Delivery/AgentInvocation completion for ${spec.runId}`,
       500,
     );
-    assert.equal(durable.delivery.attempts, 1, "clean release gate requires exactly one Delivery attempt");
-    assert.equal(durable.invocation_count, 1, "clean release gate requires exactly one AgentInvocation");
+    const cleanDelivery = assertCleanReleaseDeliveryShape(durable);
     assert.equal(durable.binding?.agent_kind, "pi");
     assert.equal(durable.binding?.session_id, durable.run.session_id);
     assert.ok(durable.binding?.session_file, "durable binding must include the exact Pi session file");
@@ -790,6 +804,7 @@ export async function runAcceptance(options) {
         state: durable.delivery.state,
         attempts: durable.delivery.attempts,
       },
+      delivery_handoff_retry_recovered: cleanDelivery.handoff_retry_recovered,
       invocation: {
         invocation_id: durable.invocation.invocation_id,
         state: durable.invocation.state,
