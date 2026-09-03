@@ -1,6 +1,6 @@
 # pi-runs Development Checkpoint
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 This is the authoritative migration checkpoint for pi-runs. **Every completed development phase must update this file before starting the next phase.**
 
@@ -44,8 +44,8 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 | R4 | Pi live session bridge + completion message | **real Pi live terminal-delivery gate passed 2026-08-31** |
 | R5 | Pi offline exact-session continuation | **real exact-session + hpc.example provider-success acceptance passed 2026-08-31** |
 | R6 | origin-leaf lineage + `runs_rebind` | **real same-session `/tree` block + rebind recovery passed 2026-08-31** |
-| R7 | unattended/fault matrix with remote HPC | **core crash/restart matrix completed 2026-08-31; multi-hour soak remains release hardening** |
-| R8 | Pi-first v1 production closure | **in progress 2026-09-02 — installation/readiness, repeatable real-Pi release gate, soak/endurance, legacy retirement and release candidate** |
+| R7 | unattended/fault matrix with remote HPC | **completed — core crash/restart matrix 2026-08-31; formal multi-hour mixed Local+Slurm endurance closed by authority #11 on 2026-09-03** |
+| R8 | Pi-first v1 production closure | **completed 2026-09-03 — installation/readiness, real-Pi release gates, formal endurance, legacy retirement and final RC replay all green** |
 | R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred post-v1 — design only; no Codex/other-agent project work until runwatch + pi-runs v1 is complete** |
 
 ## P0 repository baseline — completed 2026-09-02
@@ -346,9 +346,9 @@ Local Process routing/documentation regression at R3e closeout: `npm test` — *
 - [x] The live bridge durable-acked `delivery_id=live-bridge-smoke:a1:terminal` with `outcome=delivered`.
 - [x] Explicit command `PI_RUNS_REAL_LIVE_ACCEPTANCE=1 node --test test/live-bridge-real-pi.test.mjs` — **1 passed, 0 failed** in about 2.3s. The gate uses an invalid temporary provider key and terminates after delivery acceptance; provider success is deliberately not part of live-delivery correctness.
 
-## R8 — Pi-first v1 production closure — in progress 2026-09-02
+## R8 — Pi-first v1 production closure — completed 2026-09-03
 
-The functional Pi path is already proven. R8 turns that path into a repeatable product release and intentionally blocks new AgentAdapter work until closure.
+The functional Pi path is now release-qualified. R8 turned it into a repeatable Pi-first product release; new AgentAdapter work remains intentionally deferred until after the coordinated v0.1.0 release.
 
 ### R8a — installation/readiness surface — completed 2026-09-02
 
