@@ -113,29 +113,84 @@ Pi session 信息不应让模型手填。extension 在 `runs_submit` 时从 Pi c
 | `runs_rebind` | 将已有 Run 显式绑定到当前 Pi branch |
 | `runs_adopt` | 兼容性接管已有 scheduler job；不是正常 submit 路径 |
 
-正常长任务流程：
+## Foreground / background is a UX choice, not a durability choice
+
+The post-v0.1 design deliberately separates **execution ownership** from **how the user waits**. Every scientific Run is durable in `runwatchd`; foreground and background are only two observation modes over the same Run.
+
+The mode decision is dependency-driven rather than duration-driven:
+
+| Situation | Default Pi behavior | Why |
+|---|---|---|
+| The next reasoning step needs this result (`run tests and fix failures`, `run refinement then inspect map`) | `runs_submit -> runs_wait` until terminal | Preserve the familiar synchronous command mental model even if the wait lasts minutes or hours. |
+| The user explicitly says background / "run this while I do something else" | `runs_submit -> detach` | The user has chosen concurrency. |
+| Pi has genuinely independent useful work to do while the Run executes | submit, continue that work, then attach or consume continuation | Backgrounding creates real parallelism instead of merely avoiding a long tool call. |
+| The work is unattended / Pi may exit / machine or network may disappear | `runs_submit -> durable continuation -> end turn` | A foreground watcher would add no value and must never become the durability boundary. |
+
+This follows the useful community rule that **a command being slow is not, by itself, a reason to background it**. When the result is required before useful work can continue, foreground waiting is the lower-cognitive-load behavior.
+
+### Synchronous UX over an asynchronous substrate
+
+The normal foreground experience should look like an ordinary long shell command:
 
 ```text
-runs_submit
-  -> continuation=live_armed | armed
-  -> end current turn
-  -> live_armed: keep Pi running
-  -> armed: runwatch may relaunch exact Pi session after Pi exits
+user: run the tests and fix whatever fails
+
+Pi
+  -> runs_submit                     # durable ownership begins immediately
+  -> runs_wait(run_id)               # user-facing synchronous experience
+       running  12s
+       running  2m 14s
+       running  17m 03s
+       ...
+       succeeded | failed | cancelled
+  -> inspect result/logs/artifacts
+  -> continue reasoning in the same turn
 ```
 
-默认仍只有在用户明确要求“等它跑到某个条件再继续”时使用 `runs_wait`；这类 foreground wait 可以持续数分钟甚至更久，并不是 Pi API 的禁区。关键边界不是“必须短”，而是 watcher 必须可观察、可 Abort/detach，并且 timeout/abort 绝不能变成 `runs_cancel`。无人值守、小时到天级任务仍优先结束当前 turn，让 durable continuation 接管。
+`runs_wait(run_id)` should therefore evolve from P1's 24-hour attachment cap to **no user-level deadline by default**. Omitted `timeout_ms` means "wait until the requested condition or user detach". An explicit timeout remains available for bounded checks; `until=running` remains useful for launch gates, while the normal default is `until=terminal`.
 
-Foreground observation uses the existing daemon-owned `wait_run` snapshot capability in bounded slices rather than starting a second scheduler poller:
+An unbounded user wait must **not** create an unbounded transport operation. It is implemented as bounded local-IPC observation slices over the already-durable Run:
 
 ```text
-runs_wait(until=terminal|running, timeout_ms=T)
-  -> wait_run slice
-  -> Pi onUpdate(status, handle, elapsed, condition)
-  -> repeat while attached
-  -> condition met: return snapshot
-  -> timeout / Escape / AbortSignal: detach watcher only
-  -> Run remains durable in runwatch
+runs_wait(until=terminal, timeout_ms=omitted)
+  -> wait_run bounded slice
+  -> onUpdate(current snapshot, elapsed, health)
+  -> next bounded slice
+  -> ... indefinitely from the user's point of view
+  -> terminal: return final Run
+
+Escape / watcher AbortSignal / explicit detach
+  -> stop only this foreground observer
+  -> Run continues in runwatch
+  -> persistent Run presence remains visible
+  -> completion still follows the normal durable Delivery path
 ```
+
+Transport/runtime rules:
+
+- no single IPC socket is held for the full scientific runtime; each slice has its own bounded deadline;
+- transient daemon restart / local IPC loss enters a visible `reconnecting` watcher state with bounded backoff instead of converting a healthy durable Run into failure;
+- semantic errors such as unknown Run, protocol incompatibility or authorization failure still fail closed;
+- progress updates replace the same tool-result surface and must not append one LLM-context message per heartbeat;
+- heartbeat cadence may back off for very long stable Runs, but state/health changes should be surfaced promptly;
+- `runs_cancel` remains the only user/model operation that asks runwatch to cancel scientific work. Detaching a watcher is never cancellation.
+
+### Foreground-to-background transition
+
+A user should be able to start with the familiar synchronous mode and change their mind later. This is the same product pattern as VS Code's "Continue in Background" and attach/detach task UIs:
+
+```text
+foreground wait
+  -> user keeps waiting: nothing new to learn
+  -> user presses Escape: current Pi turn may abort, watcher disappears, Run survives
+  -> future UX: /runs detach (or equivalent immediate UI action)
+       detaches only the active watcher without aborting the whole agent turn
+  -> footer/widget continues to show the Run as active
+```
+
+The future `/runs` command is a **user UI command**, not a ninth model-facing Run tool and not another lifecycle authority.
+
+This command also solves a Pi-specific interaction detail: ordinary steering messages are queued until the current assistant tool batch finishes, while extension commands can execute immediately during streaming. An in-flight watcher should therefore have its own abort controller registered by Run id so `/runs detach` can abort that watcher only, let `runs_wait` return a detached observation, and allow the agent turn to continue without sending `runs_cancel`.
 
 ## 与 pi-ssh-tools 的标准科研循环
 
@@ -159,28 +214,105 @@ ssh_read / ssh_bash              # 检查真实科研输出
 
 `runs_logs` 仍由 runwatch 提供，因为 stdout/stderr、scheduler reason、exit code 属于 Run observability；大体积科研文件和任意分析命令属于 `pi-ssh-tools`。
 
-## Pi status surface
+## Unified Run presence: a Run must be hard to forget
 
-Long-wait semantics make passive visibility part of the product, but pi-runs should not take over Pi's entire footer. It publishes one composable extension status entry:
+Long-running work needs a **presence model**, not just a status API. The user should be able to switch terminals, work on another prompt, or return after a break and immediately notice that computation is still in flight. This requirement applies equally to foreground and detached Runs.
+
+The UI is layered so no single notification mechanism becomes the source of truth:
+
+### Layer 1 — inline foreground progress
+
+While `runs_wait` is attached, Pi's official `onUpdate` channel updates the existing tool card/result with bounded information:
 
 ```text
-status key: pi-runs
-
-Runs 2 running · 1 queued
-Runs 1 running · 1 failed
-Runs idle
+Waiting: refine-42
+running · Slurm <job-id> · 18m 07s · observation fresh
+Escape/detach stops waiting; the Run keeps running.
 ```
 
-Design rules:
+Show state, human name/run id, runner/job handle, elapsed time, observation health and the wait condition. Do not dump repeated logs by default; logs remain an explicit bounded surface.
 
-- use `ctx.ui.setStatus("pi-runs", ...)`, not a custom `setFooter`, so it coexists with `pi-ssh-tools` and user footer extensions;
-- show live/attention state only; do not fill the footer with historical success counts;
-- warning tone for failed/timed-out/lost/unknown, accent for live Runs, muted for idle;
-- refresh in a session-scoped loop only while UI exists: initialize on `session_start`, refresh after relevant tool/turn changes, clear on `session_shutdown`;
-- all status reads are bounded and non-blocking from the agent turn's perspective;
-- active v1 status is runwatch-only；请求已退役的 `PI_RUNS_BACKEND=legacy` 必须 fail closed，`auto` 在 runwatch 不可用时直接显示 control-plane failure；
+### Layer 2 — persistent footer dock
 
-With the canonical runwatch backend, the base live count is **session-scoped**: Runs bound to the current Pi session are expanded normally, unrelated active Runs are compressed to `N other live`, and failures/unknown states outside the session are surfaced as `N global attention` so important global problems are never hidden. runwatch Observation sidecars keep execution and visibility separate: a current live Run can remain `running` while `observation.health=unreachable|probe_error`, in which case the footer adds `N probe issue(s)` and warning tone; live probe failures from another Pi session contribute to `global attention`. Normal `fresh` observations stay silent. Current-session continuation attention adds `N continuation`, `N rebind`, `session busy`, and `bridge offline`. Run/observation/bridge composition is kept in a pure summary function with regression tests, while UI publication remains session-scoped.
+Use the composable `ctx.ui.setStatus("pi-runs", ...)` entry as an **always-present dock whenever there is active or attention-worthy Run state**. Clear it when truly idle rather than spending permanent footer space on `Runs idle`.
+
+Examples:
+
+```text
+Runs ● refine 18m [attached]
+Runs ● 2 active · 1 other
+Runs ○ refine queued 4m · 2 other live
+Runs ⚠ refine failed · 1 other live
+Runs ⚠ 1 rebind · 2 active
+Runs ↻ reconnecting · 2 active
+```
+
+Priority is: current foreground attachment -> current-session active Run -> current-session continuation/rebind/failure -> global failure/probe attention -> other live Runs. A current-session named Run should be shown directly when space permits; counts are the narrow-terminal fallback.
+
+### Layer 3 — compact Run widget / dashboard
+
+When there are multiple Runs or attention state, use Pi's `setWidget` as a compact below-editor/above-editor task dock, inspired by Pi community background-task docks and long-task sidebars. Keep only a few prioritized rows visible so the conversation is not displaced:
+
+```text
+Runs
+▶ refine-map      running 18m   hpc.example/slurm #<job-id>   attached
+● preprocess      running  7m   local/process        async
+○ reconstruction  queued   3m   hpc.example/slurm #<job-id>
+! mask-fit        failed   11m ago                    attention
+```
+
+A future `/runs` interactive command opens the complete list and actions (`attach`, `detach`, `logs`, explicit `cancel`, `rebind` where legal). This is user-facing navigation; model-facing tools stay frozen.
+
+### Layer 4 — terminal transition notification
+
+Use `ctx.ui.notify` as a one-shot *attention accelerator*, never as the only record that work existed:
+
+- foreground-attached completion normally needs no duplicate toast because the tool itself returns terminal;
+- detached/async success gets one concise completion notification when Pi UI is active;
+- detached failure/cancellation/rebind/observation-loss gets warning/error attention;
+- notifications must be deduplicated by Run terminal transition and routed to the correct session/project context; never inject a completion into an unrelated active session merely because it happens to be on screen;
+- completion that happens while Pi is closed is reconstructed from runwatch/Delivery state on the next session start. A small pi-runs **UX-only seen cursor** may suppress duplicate toasts, but it is not a scheduler, ledger or source of Run truth.
+
+Native desktop/terminal notifications can be an opt-in adapter later (similar to iTerm2's long-command completion alert), but core correctness must not depend on them.
+
+### Presence is reconstructed, not owned, by Pi
+
+`RunPresence` is a derived projection:
+
+```text
+RunPresence {
+  run_id / display_name
+  relation: attached | current_session | same_project | other
+  execution: queued | running | terminal
+  runner / durable_handle / elapsed
+  observation_health
+  continuation: none | live_armed | armed | pending | needs_rebind
+  attention
+}
+```
+
+The authoritative fields come from runwatch plus the exact Pi continuation binding. Any local `seen`/collapsed preference is disposable UI metadata only.
+
+`display_name` is a first-class UX requirement. Persistent task docks are not useful if rows are only opaque `pi_<tool-call>` ids or scheduler numbers. `runs_submit.name` should be strongly encouraged and pi-runs should provide a concise deterministic fallback (for example a normalized command/program label plus stable short suffix) when the model omits it. Run id and JobID remain visible as secondary identity/detail, not the primary label.
+
+On every `session_start` / resume / reload, pi-runs immediately rebuilds presence from runwatch before relying on remembered UI state. Therefore:
+
+- switching away and back still shows active Runs;
+- opening another Pi session still shows `N other live` / global attention without stealing completion delivery;
+- killing/restarting Pi loses only the watcher, never the Run;
+- restarting runwatch temporarily changes health/presence to reconnecting, then reconstructs the same durable Runs;
+- headless/JSON/RPC modes receive the same tool partial updates and terminal result but simply omit footer/widget/toast surfaces.
+
+### Multi-Run and notification-noise policy
+
+Persistent visibility should be high-signal rather than noisy. Community experience with background-agent notifications shows that "some background work changed" is not the same as "the user needs attention now". Therefore:
+
+- active work is represented continuously in the dock/widget, not by periodic toasts;
+- success toast once; failure/rebind/control-plane loss gets stronger attention;
+- intermediate heartbeats never trigger toast/bell;
+- if several Runs finish together, coalesce them (`3 Runs completed · 1 failed`) and let `/runs` expand details;
+- a busy agent turn may queue the correct-session completion follow-up, but UI presence can update immediately without starting another model turn;
+- exact-session durable Delivery remains the mechanism for continuing scientific reasoning after async completion.
 
 ## Pi session / branch binding
 

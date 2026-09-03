@@ -47,6 +47,7 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 | R7 | unattended/fault matrix with remote HPC | **completed — core crash/restart matrix 2026-08-31; formal multi-hour mixed Local+Slurm endurance closed by authority #11 on 2026-09-03** |
 | R8 | Pi-first v1 production closure | **completed 2026-09-03 — installation/readiness, real-Pi release gates, formal endurance, legacy retirement and final RC replay all green** |
 | P1 | Post-v0.1.0 foreground `runs_wait` semantics correction | **completed 2026-09-04 — observable sliced wait, detach-only abort/timeout, docs/Skill and Pi loader/default regressions green** |
+| P2 | Long-wait familiar UX + persistent Run presence redesign | **design completed 2026-09-04 — implementation pending; no runtime changes in this phase** |
 | R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred post-v1 — design only; no Codex/other-agent project work until runwatch + pi-runs v1 is complete** |
 
 ## P0 repository baseline — completed 2026-09-02
@@ -486,6 +487,33 @@ The functional Pi path is now release-qualified. R8 turned it into a repeatable 
 - [x] Explicit Pi loader replay (`volta.exe run pi --offline --no-extensions -e ./extensions/runs/index.ts --list-models`) exits **0** with the updated `runs_wait` TypeBox schema and `onUpdate` implementation.
 - [x] `npm pack --dry-run --json` still contains **23 files / 193,145 bytes unpacked** and no `legacy/` runtime surface. Package metadata remains `0.1.0` in the worktree for now; this P1 commit does not rewrite, move or retag the historical local `v0.1.0` release.
 - [x] P1 is closed as post-v0.1.0 work. `docs/V1_RELEASE_CANDIDATE.md`, `docs/RELEASE_NOTES_v0.1.0.md`, the v0.1.0 tag and its qualification evidence remain historical release records rather than being retroactively edited.
+
+### P2 — long-wait familiar UX + persistent Run presence redesign — design completed 2026-09-04
+
+Research/design conclusions:
+
+- [x] Reframed the foreground/background decision around **dependency rather than duration**. Community Pi background-task guidance explicitly follows the useful rule that a slow command should stay foreground when its result is required before useful work can continue; backgrounding is for explicit concurrency, services, or genuinely independent work.
+- [x] Defined the target product as **synchronous UX over an asynchronous durable substrate**: `runs_submit` always establishes runwatch ownership first, then `runs_wait` may remain attached until terminal for the familiar "run command -> wait -> continue" experience without turning Pi into the lifecycle authority.
+- [x] Superseded P1's 24-hour *design target* for the next implementation: once `runs_wait` is deliberately chosen, omitted `timeout_ms` should mean no user-level deadline (`until=terminal` by default). Each local IPC observation remains bounded and reconnectable; explicit timeout still provides a bounded observer when requested.
+- [x] Defined foreground-to-background as a cheap observer transition rather than a new Run transition. Escape/Abort detaches only; a future immediate `/runs detach`/UI action can mirror VS Code/terminal "continue in background" behavior without adding a ninth model-facing tool. Pi extension commands can execute during streaming, so this action can own a watcher-specific AbortController and detach the wait without cancelling the Run or requiring the whole agent turn to be aborted.
+- [x] Added a four-layer Run-presence model: inline `onUpdate` for an attached wait; always-visible `setStatus` dock while active/attention state exists; compact prioritized `setWidget` task rows plus a future `/runs` dashboard; one-shot deduplicated `notify` on terminal transitions for detached work.
+- [x] Presence is reconstructed from runwatch + exact Pi continuation binding on every session start/resume/reload. A future local `seen` cursor is allowed only as disposable notification/UI metadata; it must never become a scheduler, durable Run ledger, completion router, or cancellation authority.
+- [x] Designed cross-session behavior so active Runs remain discoverable (`current session` expanded, `other live` compressed, global failures/probe issues never hidden) while terminal continuation remains exact-session. This explicitly avoids the real background-task failure mode where a completion is routed to whichever unrelated session happens to be active.
+- [x] Designed notification-noise rules: continuous work belongs in dock/widget, not repeated toasts; foreground completion normally does not duplicate-notify; detached success notifies once; failure/rebind/control-plane loss gets stronger attention; simultaneous completions coalesce; progress heartbeats never ring/bell.
+- [x] Headless/JSON/RPC keeps the same Run/wait semantics through partial tool updates + terminal result but omits interactive footer/widget/toast layers.
+- [x] Promoted human-readable Run naming into the presence design. `name` should be strongly encouraged at submit time and pi-runs should derive a concise deterministic display fallback when omitted; Run id/JobID remain secondary identities so a user returning hours later sees `refine-map` rather than an opaque tool-call id.
+
+Implementation plan (next phase, not yet executed):
+
+1. Change `runs_wait` option normalization so omitted `timeout_ms` is unbounded from the user perspective while each daemon `wait_run` slice stays bounded; keep explicit finite timeout compatibility.
+2. Add transient runwatch reconnect/backoff semantics to the foreground watcher, with visible `reconnecting` progress and fail-closed handling for semantic/protocol errors.
+3. Extend the pure status projection into `RunPresence` (attachment relation, deterministic human display name, elapsed, runner/handle, observation health, continuation/attention) and keep it testable independently of Pi UI.
+4. Upgrade the `pi-runs` status entry from count-only output to a prioritized named foreground/current-session representation with narrow-terminal count fallback; clear when genuinely idle.
+5. Add compact `setWidget` task presence for active/attention Runs and a user-only `/runs` dashboard/action surface. Do not add model-facing tools or duplicate `pi-ssh-tools` workspace operations.
+6. Add deduplicated terminal transition notification and bounded UX-only seen metadata; verify exact-session routing and restart/resume reconstruction.
+7. Add explicit acceptance for: multi-hour/unbounded foreground success; foreground failure return; Escape/detach while Run continues; Pi restart while Run lives; runwatch restart/reconnect during wait; async Run visible after switching away/back; multi-Run prioritization; coalesced completion/failure attention; wrong-session notification rejection; headless partial-update path.
+
+P2 changes only `docs/design.md` and this checkpoint. Active runtime, `v0.1.0` tag/release notes and formal v1 endurance evidence remain untouched.
 
 ### Post-v1 AgentAdapter policy
 
