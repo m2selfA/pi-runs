@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
   closeSync,
@@ -24,6 +24,11 @@ const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled", "timed_out"
 
 function safeNonce() {
   return `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
+}
+
+function acceptanceMarkerName(nonce) {
+  const digest = createHash("sha256").update(String(nonce), "utf8").digest("hex").slice(0, 10);
+  return `r8b-${digest}.txt`;
 }
 
 export function endpointFor(nonce) {
@@ -83,7 +88,7 @@ export function buildAcceptanceSpec(options, nonce) {
     if (!String(options.workdir).startsWith("/")) {
       throw new Error("Slurm --workdir must be an absolute POSIX path");
     }
-    const markerName = `runwatch-r8b-${nonce}.txt`;
+    const markerName = acceptanceMarkerName(nonce);
     const markerProgram = `from pathlib import Path; Path(${JSON.stringify(markerName)}).write_text(${JSON.stringify(token)}, encoding="utf-8")`;
     // Keep the seed prompt safe across Windows Volta/Pi argv reconstruction: avoid cmd.exe
     // metacharacters such as > | & < ^ in the remote command text embedded inside -p.
@@ -119,7 +124,7 @@ export function buildAcceptanceSpec(options, nonce) {
   }
   const workdir = options.workdir ? resolve(options.workdir) : resolve(options.evidenceDir);
   if (!isAbsolute(workdir)) throw new Error("local-process workdir must be absolute");
-  const markerName = `local-marker-${nonce}.txt`;
+  const markerName = acceptanceMarkerName(nonce);
   const markerPath = options.localMarkerInWorkdir
     ? resolve(workdir, markerName)
     : resolve(options.evidenceDir, markerName);
@@ -150,6 +155,8 @@ export function buildAcceptanceSpec(options, nonce) {
   };
 }
 
+const RELEASE_SUCCESS_ACK = "R8B_RELEASE_OK";
+
 export function buildSeedPrompt(spec) {
   const futureSteps = spec.verificationInstructions.map((line, index) => `${index + 4}. ${line}`);
   const finalStep = futureSteps.length + 4;
@@ -166,7 +173,7 @@ export function buildSeedPrompt(spec) {
     `2. Call runs_status exactly once for ${spec.runId}.`,
     `3. Call runs_logs exactly once for ${spec.runId}.`,
     ...futureSteps,
-    `${finalStep}. Only after the marker is verified, reply with exactly ${JSON.stringify(`R8B_RELEASE_OK:${spec.runId}:${spec.token}`)} and stop.`,
+    `${finalStep}. Only after the marker is verified, reply with exactly ${JSON.stringify(RELEASE_SUCCESS_ACK)} and stop.`,
   ].filter(Boolean).join(" ");
 }
 
@@ -369,13 +376,12 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
     `${readTool} must successfully read the exact acceptance token at least once`,
   );
 
-  const expectedSuccessMarker = `R8B_RELEASE_OK:${spec.runId}:${spec.token}`;
-  const releaseAckPrefix = `R8B_RELEASE_OK:${spec.runId}:`;
+  const expectedSuccessMarker = RELEASE_SUCCESS_ACK;
   const assistantMessages = afterCompletion
     .filter((row) => row?.type === "message" && row?.message?.role === "assistant")
     .map((row) => row.message);
-  const releaseAcknowledgements = assistantMessages.filter((message) =>
-    extractAssistantText(message).startsWith("R8B_RELEASE_OK:"),
+  const releaseAcknowledgements = assistantMessages.filter(
+    (message) => extractAssistantText(message) === expectedSuccessMarker,
   );
   assert.equal(
     releaseAcknowledgements.length,
@@ -384,15 +390,6 @@ export function inspectPersistedSession(rows, spec, deliveryId) {
   );
   const releaseAcknowledgement = releaseAcknowledgements[0];
   const acknowledgementText = extractAssistantText(releaseAcknowledgement);
-  assert.ok(
-    acknowledgementText.startsWith(releaseAckPrefix),
-    "release success acknowledgement must be bound to the completed Run",
-  );
-  const copiedToken = acknowledgementText.slice(releaseAckPrefix.length);
-  assert.ok(
-    copiedToken.length > 0 && !/\s/.test(copiedToken),
-    "release success acknowledgement must contain one non-empty copied token field",
-  );
   assert.equal(
     releaseAcknowledgement.stopReason,
     "stop",

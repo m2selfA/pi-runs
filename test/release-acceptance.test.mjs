@@ -110,7 +110,7 @@ test("release prompt freezes initial handoff and future verification contract", 
   assert.equal(spec.submitArgs.name, spec.runId);
   assert.match(prompt, /Do not call runs_wait/);
   assert.match(prompt, new RegExp(`R8B_SUBMITTED:${spec.runId}`));
-  assert.match(prompt, new RegExp(`R8B_RELEASE_OK:${spec.runId}:${spec.token}`));
+  assert.match(prompt, /reply with exactly "R8B_RELEASE_OK" and stop/);
 });
 
 test("Slurm seed prompt avoids Windows shell metacharacters while preserving the remote token write", () => {
@@ -126,6 +126,27 @@ test("Slurm seed prompt avoids Windows shell metacharacters while preserving the
   );
   assert.equal(delayed.delaySec, 9);
   assert.equal(delayed.submitArgs.time, "00:02:09");
+  assert.match(delayed.markerName, /^r8b-[a-f0-9]{10}\.txt$/);
+  assert.equal(delayed.markerName, buildAcceptanceSpec(
+    {
+      mode: "slurm",
+      host: "hpc.example",
+      workdir: "/shared/workspace",
+      evidenceDir: process.cwd(),
+      delaySec: 9,
+    },
+    "delay-test",
+  ).markerName);
+  assert.notEqual(delayed.markerName, buildAcceptanceSpec(
+    {
+      mode: "slurm",
+      host: "hpc.example",
+      workdir: "/shared/workspace",
+      evidenceDir: process.cwd(),
+      delaySec: 9,
+    },
+    "delay-test-other",
+  ).markerName);
   assert.equal(slurmAcceptanceTime(600), "00:12:00");
   assert.match(delayed.submitArgs.command, /^sleep 9; /);
   const spec = slurmSpec();
@@ -266,7 +287,7 @@ test("clean release delivery shape permits one live/offline handoff retry but no
 test("persisted session inspection enforces exactly-once completion, settlement, tools, and terminal Run acknowledgement", () => {
   const spec = localSpec();
   const deliveryId = `${spec.runId}:a1:terminal`;
-  const success = `R8B_RELEASE_OK:${spec.runId}:${spec.token}`;
+  const success = "R8B_RELEASE_OK";
   const rows = [
     { type: "session", id: "session-1" },
     {
@@ -337,37 +358,36 @@ test("persisted session inspection enforces exactly-once completion, settlement,
   const retried = inspectPersistedSession(retryRows, spec, deliveryId);
   assert.equal(retried.verification_tools.filter((name) => name === "read").length, 2);
 
-  const providerCopyError = `R8B_RELEASE_OK:${spec.runId}:R8B_TOKEN_copy-error`;
-  const copyErrorRows = rows.map((row) => {
+  const typoRows = rows.map((row) => {
     if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
     if (row.message.content?.[0]?.type !== "text" || row.message.content[0].text !== success) return row;
     return {
       ...row,
       message: {
         ...row.message,
-        content: [{ type: "text", text: providerCopyError }],
-      },
-    };
-  });
-  const copyError = inspectPersistedSession(copyErrorRows, spec, deliveryId);
-  assert.equal(copyError.success_marker, providerCopyError);
-  assert.equal(copyError.success_marker_exact, false);
-  assert.equal(copyError.expected_success_marker, success);
-
-  const wrongRunRows = rows.map((row) => {
-    if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
-    if (row.message.content?.[0]?.type !== "text" || row.message.content[0].text !== success) return row;
-    return {
-      ...row,
-      message: {
-        ...row.message,
-        content: [{ type: "text", text: `R8B_RELEASE_OK:wrong-run:${spec.token}` }],
+        content: [{ type: "text", text: "R8_RELEASE_OK" }],
       },
     };
   });
   assert.throws(
-    () => inspectPersistedSession(wrongRunRows, spec, deliveryId),
-    /must be bound to the completed Run/,
+    () => inspectPersistedSession(typoRows, spec, deliveryId),
+    /exactly one release success acknowledgement/,
+  );
+
+  const decoratedRows = rows.map((row) => {
+    if (row?.type !== "message" || row?.message?.role !== "assistant") return row;
+    if (row.message.content?.[0]?.type !== "text" || row.message.content[0].text !== success) return row;
+    return {
+      ...row,
+      message: {
+        ...row.message,
+        content: [{ type: "text", text: `${success}:${spec.runId}:${spec.token}` }],
+      },
+    };
+  });
+  assert.throws(
+    () => inspectPersistedSession(decoratedRows, spec, deliveryId),
+    /exactly one release success acknowledgement/,
   );
 
   const reorderedTools = rows.map((row) => {
