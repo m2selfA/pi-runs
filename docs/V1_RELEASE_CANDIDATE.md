@@ -105,8 +105,13 @@ Already qualified:
 - formal session #2 is preserved as non-resumable after segment 5 exposed an acceptance-verifier false negative. Round 5 passed Local + Job <job-id> exactly once across serve <pid> -> <pid>. In round 6, Job <job-id> hit the intended completion=1/settlement=0 crash window and recovered to final completion=1/settlement=1 on Delivery attempt 2, while the Local sibling branch received zero completion/settlement before explicit rebind and then finished with one completion/settlement. Because the same global crash also retried the Local Delivery, its correct attempt count was 3; the old verifier incorrectly required rebind attempt 2 and failed segment 5 after **1552.697 s**. The evidence remains `dirty_segments=[failed:5]` and contributes no additional formal time.
 - the verifier now models combined fault retry sources explicitly: a case must account for its own rebind/settlement-crash retries and may receive at most one extra retry from another case's injected global serve crash. A dedicated regression covers the observed rebind+global-crash shape; current default tests are **53 passed / 0 failed / 1 skipped**.
 
+Additional formal evidence:
+
+- formal authority #3 `<soak-evidence>` is preserved as failed/non-resumable. Round 1 passed Local + Slurm Job <job-id> across serve <pid> -> <pid> with exactly-once durable continuation. Round 2 then completed the Local branch-rebind durable path and exact marker-file read, but the real provider copied the verified token incorrectly in its terminal free-text acknowledgement by omitting `<opaque-id>`; the current verifier requires exact equality of that assistant string and therefore failed segment 1 after **1347.466 s**. No failed-segment time is credited. This failure does not justify changing DB/session evidence or accepting the old authority in place.
+
 Still blocking a v1 tag:
 
-- run a new frozen formal endurance authority with the corrected combined-fault verifier until its read-only report returns `v1_endurance.qualified=true`. The prior session remains preserved and non-resumable by design.
+- harden the acceptance verifier so durability qualification is authoritative on exact tool-result token verification plus the already-frozen exactly-once Delivery/Invocation/completion/settlement and verification-tool sequence, while still requiring one terminal Run-bound success acknowledgement without making byte-perfect LLM copying of an already verified token a durability invariant; regression-test the observed copy-error shape.
+- after that verifier change, start a new frozen formal endurance authority and run it until its read-only report returns `v1_endurance.qualified=true`. All prior failed authorities remain preserved and non-resumable by design.
 
 No formal gate may require a human `continue` message.
