@@ -1099,6 +1099,13 @@ async function inspectCompletedCase(item, shared, timeoutMs) {
   };
 }
 
+export async function settleConcurrentInspections(inspections) {
+  const outcomes = await Promise.allSettled(inspections);
+  const failed = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failed) throw failed.reason;
+  return outcomes.map((outcome) => outcome.value);
+}
+
 async function runRound(options, shared, round) {
   const roundDir = join(shared.evidenceDir, `round-${String(round).padStart(4, "0")}`);
   await mkdir(roundDir, { recursive: true });
@@ -1160,7 +1167,7 @@ async function runRound(options, shared, round) {
       restart = await restartServe(shared);
     }
 
-    const results = await Promise.all(
+    const results = await settleConcurrentInspections(
       cases.map((item) => inspectCompletedCase(item, shared, options.plan.timeoutSec * 1000)),
     );
     const summary = {

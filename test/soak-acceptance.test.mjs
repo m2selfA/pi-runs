@@ -13,6 +13,7 @@ import {
   isDurablySubmittedRun,
   parseModes,
   piApiModuleForShimPath,
+  settleConcurrentInspections,
 } from "../scripts/acceptance/pi_v1_soak.mjs";
 
 test("soak modes are deduplicated and reject unknown execution shapes", () => {
@@ -26,6 +27,39 @@ test("fault injection waits for a durable execution handle rather than a submitt
   assert.equal(isDurablySubmittedRun({ status: "queued", job_id: null }), false);
   assert.equal(isDurablySubmittedRun({ status: "queued", job_id: "31751" }), true);
   assert.equal(isDurablySubmittedRun({ status: "running", job_id: "local:<handle>:abcd" }), true);
+});
+
+test("concurrent case inspection waits for every sibling before propagating failure", async () => {
+  let releaseSibling;
+  let siblingSettled = false;
+  const sibling = new Promise((resolve) => {
+    releaseSibling = () => {
+      siblingSettled = true;
+      resolve("second-ok");
+    };
+  });
+  const combined = settleConcurrentInspections([
+    Promise.reject(new Error("first-inspector-failed")),
+    sibling,
+  ]);
+  let propagated = false;
+  combined.catch(() => {
+    propagated = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(propagated, false, "first rejection must not escape while a sibling inspector is still active");
+  assert.equal(siblingSettled, false);
+  releaseSibling();
+  await assert.rejects(combined, /first-inspector-failed/);
+  assert.equal(siblingSettled, true);
+});
+
+test("concurrent case inspection preserves successful result order", async () => {
+  const results = await settleConcurrentInspections([
+    Promise.resolve("local"),
+    Promise.resolve("slurm"),
+  ]);
+  assert.deepEqual(results, ["local", "slurm"]);
 });
 
 test("soak plan requires a shared absolute Slurm workspace", () => {

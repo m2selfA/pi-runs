@@ -112,8 +112,13 @@ Additional formal evidence:
 - the verifier now separates deterministic durability evidence from redundant LLM copying. Exact token verification remains authoritative in the successful `read`/`ssh_read` tool result; completion/settlement exactly-once, verification-tool allowlist/count/order, no resubmit/polling, and one final `stop` acknowledgement bound to the completed Run remain hard gates. The acknowledgement text is preserved in evidence and may expose an imperfect copied token without overriding the exact tool-result token. Regression covers the authority-#3 copy error, wrong-Run acknowledgement rejection and reordered-tool rejection. Focused release tests are **6/6** and default tests are **53 passed / 0 failed / 1 skipped** with the real Pi loader passing.
 - a read-only replay of authority #3's actual round-2 session now verifies completion=1, settlement=1 and `runs_status/runs_logs/read` while explicitly recording that the observed acknowledgement differs from the canonical requested marker (`success_marker_exact=false`). No failed evidence was rewritten.
 
+Additional cleanup qualification:
+
+- clean authority #4 `<soak-evidence>` passed a bounded **2229.353 s / 3-round / 6-case** segment from `<opaque-id>`: mixed Local+Slurm, three serve restarts, one real SSH loss/recovery, one branch rebind recovery and one completion-before-settlement crash recovery, all with final exactly-once completion/settlement. Its read-only report has `dirty_segments=[]`; it is intentionally not resumed because a subsequent acceptance-only cleanup fix changes the frozen tree.
+- concurrent combined-fault inspection now uses an all-settled barrier: every inspector starts concurrently, all siblings settle before any rejection propagates, and `runRound()` reaches child cleanup without orphaning another inspector's timers/polls. Focused soak tests pass **17/17**; default regression is **55 passed / 0 failed / 1 skipped**, including the real Pi loader.
+
 Still blocking a v1 tag:
 
-- start a new frozen formal endurance authority from the hardened verifier tree and run it until its read-only report returns `v1_endurance.qualified=true`. All prior failed authorities remain preserved and non-resumable by design.
+- start the final frozen formal endurance authority from the cleanup-fixed acceptance tree and run/resume it under the same 7200 s target and fault cadence until the read-only report returns `v1_endurance.qualified=true`. All earlier authorities remain preserved; only clean segments from this final authority may count.
 
 No formal gate may require a human `continue` message.
