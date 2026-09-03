@@ -160,18 +160,51 @@ test("initial event inspection requires exact doctor, submit arguments, armed co
     () => inspectInitialEvents([...events, { type: "tool_execution_start", toolName: "runs_submit", args: spec.submitArgs }], spec),
     /exactly once/,
   );
-  const nonNeutral = events.map((event) =>
+  const processSchedulerExtras = events.map((event) =>
     event?.type === "tool_execution_start" && event.toolName === "runs_submit"
-      ? { ...event, args: { ...event.args, gpus: 1 } }
+      ? { ...event, args: { ...event.args, mem: "1G", time: "00:10:00", gpus: 1 } }
       : event,
   );
-  assert.throws(() => inspectInitialEvents(nonNeutral, spec), /neutral default/);
+  assert.deepEqual(inspectInitialEvents(processSchedulerExtras, spec), {
+    doctor_calls: 1,
+    submit_calls: 1,
+    submitted_marker: true,
+  });
+  const retiredWakeup = events.map((event) =>
+    event?.type === "tool_execution_start" && event.toolName === "runs_submit"
+      ? { ...event, args: { ...event.args, wakeup: "webhook" } }
+      : event,
+  );
+  assert.throws(() => inspectInitialEvents(retiredWakeup, spec), /retired optional argument wakeup/);
+  const unknownArg = events.map((event) =>
+    event?.type === "tool_execution_start" && event.toolName === "runs_submit"
+      ? { ...event, args: { ...event.args, mystery_resource: "1" } }
+      : event,
+  );
+  assert.throws(() => inspectInitialEvents(unknownArg, spec), /unexpected argument mystery_resource/);
   const renamed = events.map((event) =>
     event?.type === "tool_execution_start" && event.toolName === "runs_submit"
       ? { ...event, args: { ...event.args, name: "different-display-name" } }
       : event,
   );
-  assert.throws(() => inspectInitialEvents(renamed, spec), /argument name must match/);
+  assert.throws(() => inspectInitialEvents(renamed, spec), /normalize to the exact production acceptance spec/);
+  const remoteSpec = slurmSpec();
+  const remoteMarker = `R8B_SUBMITTED:${remoteSpec.runId}`;
+  const remoteEvents = [
+    { type: "tool_execution_start", toolName: "runs_doctor", args: {} },
+    { type: "tool_execution_end", toolName: "runs_doctor", result: { details: { ready: true } }, isError: false },
+    { type: "tool_execution_start", toolName: "runs_submit", args: { ...remoteSpec.submitArgs, mem: "1G" } },
+    {
+      type: "tool_execution_end",
+      toolName: "runs_submit",
+      result: { details: { run_id: remoteSpec.runId, continuation: "armed" } },
+      isError: false,
+    },
+    { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: remoteMarker }] } },
+    { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: remoteMarker }], stopReason: "stop" }] },
+    { type: "agent_settled" },
+  ];
+  assert.throws(() => inspectInitialEvents(remoteEvents, remoteSpec), /normalize to the exact production acceptance spec/);
   const extraTool = [
     ...events,
     { type: "tool_execution_start", toolName: "runs_status", args: { run_id: spec.runId } },

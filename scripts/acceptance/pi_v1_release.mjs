@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
-import { clientInfo, statusRun } from "../../src/runwatch-client.mjs";
+import { buildSubmitSpec, clientInfo, statusRun } from "../../src/runwatch-client.mjs";
 
 const MAX_EVIDENCE_FILE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_TIMEOUT_SEC = 300;
@@ -205,20 +205,32 @@ const NEUTRAL_OPTIONAL_SUBMIT_ARGS = Object.freeze({
 
 export function assertSubmitArgsMatch(actual, expected) {
   assert.ok(actual && typeof actual === "object" && !Array.isArray(actual), "runs_submit args must be an object");
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    assert.deepEqual(actual[key], expectedValue, `runs_submit argument ${key} must match the acceptance contract`);
-  }
+
+  // The durable acceptance contract is the production submit_run_v2 spec, not incidental
+  // model serialization of runner-inapplicable scheduler fields. Local Process deliberately
+  // normalizes all scheduler resources to resources:{}, while Slurm/LSF preserve them.
+  // Compare through that exact production normalization so harmless Process-only extras such
+  // as mem/time cannot create a false negative, without weakening remote resource checks or
+  // durable identity/command/workspace equality.
+  assert.deepEqual(
+    buildSubmitSpec(actual),
+    buildSubmitSpec(expected),
+    "runs_submit must normalize to the exact production acceptance spec",
+  );
+
   for (const [key, actualValue] of Object.entries(actual)) {
     if (Object.hasOwn(expected, key)) continue;
     assert.ok(
       Object.hasOwn(NEUTRAL_OPTIONAL_SUBMIT_ARGS, key),
       `runs_submit supplied unexpected argument ${key}`,
     );
-    assert.deepEqual(
-      actualValue,
-      NEUTRAL_OPTIONAL_SUBMIT_ARGS[key],
-      `runs_submit optional argument ${key} must remain the neutral default`,
-    );
+    if (key === "wakeup" || key === "webhook_url") {
+      assert.deepEqual(
+        actualValue,
+        NEUTRAL_OPTIONAL_SUBMIT_ARGS[key],
+        `runs_submit retired optional argument ${key} must remain the neutral default`,
+      );
+    }
   }
 }
 
