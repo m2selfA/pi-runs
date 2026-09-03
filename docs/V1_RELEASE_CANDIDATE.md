@@ -1,6 +1,6 @@
 # pi-runs v1 Release Candidate Contract
 
-Status: **public adapter contract frozen; v1 tag blocked on endurance evidence**.
+Status: **public adapter contract frozen; v1 release candidate qualified on 2026-09-03; ready for coordinated `v0.1.0` tag/release-note preparation**.
 
 ## Scope
 
@@ -73,7 +73,7 @@ A real isolated cross-project smoke with a freshly rebuilt runwatch executable r
 
 The npm `files` allowlist ships only the active extension, active src, acceptance scripts, Skill/reference material and assets. `legacy/`, old systemd units, `pi-runs-wake`, old runner/store/wakeup code and legacy parser tests are Git history/reference only and must not enter the package.
 
-The latest dry run contains **23 files / 181,938 bytes unpacked**. Formal acceptance helpers remain inside the allowlist while legacy/runtime-retired surfaces stay excluded. Remote rebind keeps `--no-extensions` and explicitly resolves/loads only the installed `pi-ssh-tools` package alongside pi-runs, so remote verification does not depend on arbitrary user extensions. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
+The final RC dry run contains **23 files / 185,363 bytes unpacked**. Formal acceptance helpers remain inside the allowlist while legacy/runtime-retired surfaces stay excluded. Remote rebind keeps `--no-extensions` and explicitly resolves/loads only the installed `pi-ssh-tools` package alongside pi-runs, so remote verification does not depend on arbitrary user extensions. `npm test` includes a real Pi extension-loader regression when Pi is available, so TypeScript parse/load failures are release blockers rather than manual-smoke surprises.
 
 ## Release gates
 
@@ -117,7 +117,7 @@ Additional cleanup qualification:
 - clean authority #4 `<soak-evidence>` passed a bounded **2229.353 s / 3-round / 6-case** segment from `<opaque-id>`: mixed Local+Slurm, three serve restarts, one real SSH loss/recovery, one branch rebind recovery and one completion-before-settlement crash recovery, all with final exactly-once completion/settlement. Its read-only report has `dirty_segments=[]`; it is intentionally not resumed because a subsequent acceptance-only cleanup fix changes the frozen tree.
 - concurrent combined-fault inspection now uses an all-settled barrier: every inspector starts concurrently, all siblings settle before any rejection propagates, and `runRound()` reaches child cleanup without orphaning another inspector's timers/polls. Focused soak tests pass **17/17**; default regression is **55 passed / 0 failed / 1 skipped**, including the real Pi loader.
 
-Still blocking a v1 tag:
+Superseded formal-authority history (preserved, no longer blocking):
 
 - final authority #5 `<soak-evidence>` is now active from cleanup-fixed `<opaque-id>`. Round 1 passed Local `local:<handle>` + hpc.example Slurm Job <job-id> across serve <pid> -> <pid>, with Delivery/Invocation/completion/settlement all exactly once and the exact Local/Slurm result-inspection sequences.
 - authority #5 round 2 also passed: Local `local:<handle>` had zero wrong-branch completion/settlement, exactly one `runs_rebind`, Delivery attempt 2 and final completion/settlement=1/1; hpc.example Job <job-id> remained the same running JobID across isolated SSH `fresh -> unreachable(transport, Channel send error) -> fresh(scheduler)` and then settled exactly once. serve <pid> -> <pid>.
@@ -162,8 +162,20 @@ Still blocking a v1 tag:
 - authority #11 segment 2 closed cleanly at **2800.818 s / rounds 5–8 / 8 cases**, cumulative **5576.571 s / 8 rounds / 16 cases / 0 failed segments**. Coverage reached restart=8, SSH recovery=4, rebind recovery=4 and settlement-crash recovery=2; all non-duration requirements were true and only active time remained.
 - authority #11 segment 3 closed cleanly at **2223.649 s / rounds 9–11 / 6 cases**. Final formal authority is **7800.220 s / 11 rounds / 22 real cases / 3 clean segments / 0 failed segments** with Local=11, Slurm=11, restart=11, SSH recovery=5, rebind recovery=5 and settlement-crash recovery=3. Machine `v1_endurance.qualified=true`; every requirement is `true` and `reasons=[]`. Preserve `<soak-evidence>` as the current-binary release authority; no further endurance resume is needed.
 
-- authority #7 round 2 passed the first real SSH + branch-rebind pair: Local `local:<handle>`, hpc.example Job <job-id>, scheduled serve <pid> -> <pid>; the round fully verified and advanced to round 3. Current authority coverage therefore includes restart repetition plus SSH=1/rebind=1; round 3 is exercising the first settlement-crash recovery.
+## Final RC replay — qualified 2026-09-03
 
-- authority #7 segment 1 closed cleanly at **2176.025 s / 3 rounds / 6 cases**. Round 3 passed the first completion-before-settlement recovery: Local `local:<handle>` hit completion=1/settlement=0 before isolated serve <pid> -> <pid>, then recovered with attempts=2/invocations=2 and one final settlement; Job <job-id> also survived the global crash exactly once. Current coverage is restart=3, SSH=1, rebind=1, settlement-crash=1 with zero dirty segments. Resume only this authority.
+- runwatch fixed package source identity remains `<opaque-id>`; current runwatch HEAD differs from that code anchor only in release docs. Final Rust replay is `fmt/check/test` green with **106 passed / 0 failed / 8 ignored** and only the known `russh 0.54.5` future-incompat warning.
+- pi-runs runtime/acceptance identity remains authority-tree `<opaque-id>`; current pi-runs HEAD differs from it only in release docs. Final `npm test` is **57 passed / 0 failed / 1 skipped**, the explicit Pi extension loader exits 0, and explicit `PI_RUNS_REAL_LIVE_ACCEPTANCE=1` live bridge passes **1/1**.
+- fixed-package Local release evidence `<local-process-evidence>` succeeded with one packaged `runs_doctor`, one submit, Delivery attempt=1, one completed AgentInvocation, completion=1, settlement=1 and exact `runs_status/runs_logs/read` verification.
+- fixed-package hpc.example Slurm evidence `<slurm-evidence>` / Job <job-id> succeeded on `/shared/workspace` with one packaged `runs_doctor`, one submit, Delivery attempt=1, one completed AgentInvocation, completion=1, settlement=1 and exact `runs_status/runs_logs/ssh_activate/ssh_read` verification.
+- runwatch `xtask verify` returns `ok=true` for `runwatch-v0.1.0-windows-x86_64.zip`, SHA-256 `<sha256>`; pi-runs `npm pack --dry-run --json` confirms the 23-file publish boundary with no legacy runtime.
+- final read-only report of `<soak-evidence>` still returns `v1_endurance.qualified=true`, **7800.220 s**, 11 rounds, 22 cases and `dirty_segments=[]` after all replay gates.
+
+## `v0.1.0` tag / release-note plan
+
+1. Keep both repositories code-frozen; only release-document corrections are allowed before tagging. Do not introduce Codex integration, a second AgentAdapter, legacy backend paths, scheduler changes or GUI features.
+2. Use coordinated `v0.1.0` tags for runwatch and pi-runs after one final clean-worktree review. The runwatch tag may sit on docs-only commits above `<opaque-id>`; the packaged binaries are source-equivalent because `git diff --name-only <opaque-id>..HEAD` contains only release docs. The same rule holds for pi-runs above `<opaque-id>`.
+3. Release notes should lead with the Pi-first architecture (`runwatch` durable authority, `pi-runs` integration, `pi-ssh-tools` online SSH plane), the frozen eight-tool contract, Windows Local Process + Slurm/LSF execution, exact-session offline continuation/rebind, and exactly-once Delivery/settlement semantics.
+4. Release evidence should cite the fixed ZIP hash, the two final real-provider release gates, authority #11's 7800.220-second qualified endurance matrix, and the final test/package results above. Known non-blocking debt should mention only the existing `russh 0.54.5` future-incompat warning and deferred post-v1 agent integrations.
 
 No formal gate may require a human `continue` message.
