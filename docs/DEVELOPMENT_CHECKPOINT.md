@@ -459,7 +459,8 @@ The functional Pi path is already proven. R8 turns that path into a repeatable p
 - [x] Real focused Local rebind qualification passed on unchanged packaged runwatch `<opaque-id>`: `acceptance-output/<soak-evidence>`, **114.964 s / 1 case / rebind_recoveries=1 / 0 failed segments**, using a 45-second workload and the unified prompt.
 - [x] Unified acceptance tree committed as `<opaque-id>`; fresh authority #10 is frozen at `acceptance-output/<soak-evidence>` against unchanged packaged runwatch `<opaque-id>`. Frozen runwatch executable SHA-256 is `<sha256>`; pi-runs contract-tree SHA-256 is `<sha256>`; cadence remains target7200 / Local+Slurm / delay600 / seed480 / restart1 / rebind2 / settlement3 / SSH2×8s.
 - [x] Authority #10 segment 1 passed **681.265 s / round 1 / 2 cases** with zero failed segments. Local `local:<handle>` + hpc.example Job <job-id> stayed live across serve <pid> -> <pid>; machine coverage is Local=1, Slurm=1, restart=1 and zero dirty evidence.
-- [ ] Resume only authority #10 until machine `v1_endurance.qualified=true`; segment 2 / round 2 is running and carries the first scheduled SSH-loss + branch-rebind pair.
+- [x] Authority #10 segment 2 passed **687.335 s / round 2 / 2 cases**, cumulative **1368.600 s / 2 rounds / 4 cases / 0 failed segments**. Local `local:<handle>` completed the formal rebind path under the unified prompt; hpc.example Job <job-id> stayed the same running JobID through `fresh -> unreachable(Channel send error) -> unreachable(os error 10054) -> fresh`; serve <pid> -> <pid>. Coverage is restart=2, SSH=1, rebind=1, settlement-crash=0 and no dirty evidence.
+- [ ] Continue only authority #10 until machine `v1_endurance.qualified=true`. Segment 3 is running with an 1800-second per-segment budget, preserving the same frozen model/host/workdir/fault contract while sweeping rounds 3–5.
 
 ### Post-v1 AgentAdapter policy
 
