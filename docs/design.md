@@ -293,7 +293,31 @@ RunPresence {
 
 The authoritative fields come from runwatch plus the exact Pi continuation binding. Any local `seen`/collapsed preference is disposable UI metadata only.
 
-`display_name` is a first-class UX requirement. Persistent task docks are not useful if rows are only opaque `pi_<tool-call>` ids or scheduler numbers. `runs_submit.name` should be strongly encouraged and pi-runs should provide a concise deterministic fallback (for example a normalized command/program label plus stable short suffix) when the model omits it. Run id and JobID remain visible as secondary identity/detail, not the primary label.
+`display_name` is a first-class UX requirement, but **naming is not a required user task**. `runs_submit.name` remains optional: if the user explicitly names the work, preserve that intent; if the user says only "run the full tests" or "start reconstruction", Pi may infer a concise name; if no useful name is supplied at all, pi-runs must generate one automatically. Every Run presented to a human therefore has a readable `display_name` even though the caller never has to think about naming.
+
+Naming resolution is intentionally separate from durable identity:
+
+```text
+requested name?  -> sanitize/bound -> display_name
+        no
+        v
+safe semantic stem from normalized RunSpec? -> display_name
+        no
+        v
+deterministic mnemonic fallback from stable Run identity -> display_name
+```
+
+Generation rules:
+
+- Prefer a short semantic stem such as the script/module/test target or meaningful executable action: `scripts/refine_map.py` -> `refine-map`, a resume test target -> `resume-test`. Generic launchers such as `python`, `bash`, `pwsh` or `node` are not useful names by themselves.
+- Keep the result compact (normally 1-4 words) and normalize it into a readable slug; do not expose the full shell command in the dock just to manufacture a name.
+- Reject unsafe/high-entropy candidates. Raw arguments, environment values, URLs, credentials/tokens, UUID-like blobs and absolute paths must never be copied into an automatically generated label. If the safe semantic signal is weak, use a deterministic mnemonic word pair derived from stable Run identity instead, for example `quiet-cedar`.
+- Generate the fallback **once before/during durable submission and persist it with the Run**. Do not recompute it from the currently active task list, so Pi restart, runwatch restart, continuation and later status views all show the same name.
+- Names are not globally unique identifiers. If two relevant Runs would present the same `display_name`, keep the first name unchanged and append a stable mnemonic suffix derived from the new Run identity (for example `refine-map-cedar`), rather than an unstable counter such as `(2)` or a timestamp.
+- Retry/Attempt replacement does not rename the Run. A scheduler JobID may change across attempts while `run_id` and `display_name` remain stable.
+- A future user-only rename action may change `display_name` without changing `run_id`, continuation binding, scheduler handle or artifact identity.
+
+`run_id` remains the immutable authority key and JobID/process handle remains execution detail. `display_name` is a durable human label only: UI/actions may show it prominently, but internal mutation/cancel/rebind operations resolve against `run_id`, never against a possibly ambiguous name.
 
 On every `session_start` / resume / reload, pi-runs immediately rebuilds presence from runwatch before relying on remembered UI state. Therefore:
 
