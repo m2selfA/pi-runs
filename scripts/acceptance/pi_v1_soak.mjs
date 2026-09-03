@@ -1115,6 +1115,10 @@ export async function settleConcurrentInspections(inspections) {
 async function runRound(options, shared, round) {
   const roundDir = join(shared.evidenceDir, `round-${String(round).padStart(4, "0")}`);
   await mkdir(roundDir, { recursive: true });
+  // A prior round may have intentionally crashed serve after completion but before settlement.
+  // Do not make the next real Pi seed's single runs_doctor call double as a cold-start probe.
+  // Re-establish packaged runwatch IPC readiness first; the Pi contract remains fail-closed.
+  await waitForRuntime(shared.env, Math.min(options.plan.timeoutSec * 1000, 30_000));
   const cases = await Promise.all(options.plan.modes.map((mode) => seedCase(options, shared, round, mode)));
   try {
     for (const item of cases) {
