@@ -155,7 +155,7 @@ export function buildAcceptanceSpec(options, nonce) {
   };
 }
 
-const RELEASE_SUCCESS_ACK = "R8B_RELEASE_OK";
+export const RELEASE_SUCCESS_ACK = "R8B_RELEASE_OK";
 
 export function buildSeedPrompt(spec) {
   const futureSteps = spec.verificationInstructions.map((line, index) => `${index + 4}. ${line}`);

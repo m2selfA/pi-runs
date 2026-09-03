@@ -19,6 +19,7 @@ import {
   openProcessLogs,
   piCommand,
   preflightPiSshTools,
+  RELEASE_SUCCESS_ACK,
   readDatabaseEvidence,
   readJsonLines,
   terminateTree,
@@ -645,13 +646,17 @@ function inspectExplicitRebindEvents(events, item) {
   };
 }
 
-async function runExplicitRebindTurn(item, shared, timeoutMs) {
-  const prompt = [
+export function buildExplicitRebindPrompt(spec) {
+  return [
     "This is an explicit Pi v1 branch-rebind acceptance. Follow the sequence exactly and do not improvise.",
-    `Call runs_rebind exactly once with arguments ${JSON.stringify({ run_id: item.spec.runId })}.`,
-    `Before a runwatch/completion message arrives, do not call any tool other than runs_rebind. If runs_rebind succeeds, reply with exactly ${JSON.stringify(`R8C_REBOUND:${item.spec.runId}`)} and stop that turn.`,
-    `If runwatch/completion arrives in this same resumed Pi process, follow the original persisted completion instructions already present in this session: never resubmit, perform the exact verification tools, verify the marker, and finally reply with exactly ${JSON.stringify(`R8B_RELEASE_OK:${item.spec.runId}:${item.spec.token}`)} and stop.`,
+    `Call runs_rebind exactly once with arguments ${JSON.stringify({ run_id: spec.runId })}.`,
+    `Before a runwatch/completion message arrives, do not call any tool other than runs_rebind. If runs_rebind succeeds, reply with exactly ${JSON.stringify(`R8C_REBOUND:${spec.runId}`)} and stop that turn.`,
+    `If runwatch/completion arrives in this same resumed Pi process, follow the original persisted completion instructions already present in this session: never resubmit, perform the exact verification tools, verify the marker, and finally reply with exactly ${JSON.stringify(RELEASE_SUCCESS_ACK)} and stop.`,
   ].join(" ");
+}
+
+async function runExplicitRebindTurn(item, shared, timeoutMs) {
+  const prompt = buildExplicitRebindPrompt(item.spec);
   await writeFile(join(item.caseDir, "rebind-prompt.txt"), `${prompt}\n`, "utf8");
   const logs = openProcessLogs(item.caseDir, "pi-rebind");
   const explicitExtensions = ["-e", shared.extension];

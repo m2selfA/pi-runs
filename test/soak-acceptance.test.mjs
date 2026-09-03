@@ -7,6 +7,7 @@ import {
   assertEnduranceContract,
   assertResumableEnduranceState,
   buildSoakPlan,
+  buildExplicitRebindPrompt,
   deliverySessionCounts,
   evaluateV1EnduranceQualification,
   faultAttemptBounds,
@@ -19,6 +20,17 @@ import {
 test("soak modes are deduplicated and reject unknown execution shapes", () => {
   assert.deepEqual(parseModes("slurm,local-process,slurm"), ["slurm", "local-process"]);
   assert.throws(() => parseModes("slurm,ssh"), /unsupported soak mode/);
+});
+
+test("branch rebind prompt shares the exact fixed release acknowledgement", () => {
+  const prompt = buildExplicitRebindPrompt({
+    runId: "r8b_local_test",
+    token: "R8B_TOKEN_should_not_be_copied_into_ack",
+  });
+  assert.match(prompt, /reply with exactly "R8B_RELEASE_OK" and stop/);
+  assert.match(prompt, /R8C_REBOUND:r8b_local_test/);
+  assert.doesNotMatch(prompt, /R8B_RELEASE_OK:/);
+  assert.doesNotMatch(prompt, /R8B_TOKEN_should_not_be_copied_into_ack/);
 });
 
 test("fault injection waits for a durable execution handle rather than a submitting row", () => {
