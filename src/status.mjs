@@ -1,3 +1,5 @@
+import { displayNameForRun } from "./naming.mjs";
+
 export const TERMINAL = ["succeeded", "failed", "timed_out", "cancelled", "lost"];
 const KNOWN = new Set(["submitted", "submitting", "pending", "queued", "running", "cancelling", ...TERMINAL, "unknown"]);
 
@@ -55,6 +57,85 @@ export function summarizeRuns(runs) {
   };
 }
 
+function executionState(status) {
+  const value = String(status || "unknown").toLowerCase();
+  if (isTerminal(value)) return "terminal";
+  if (value === "running") return "running";
+  if (["submitted", "submitting", "pending", "queued", "cancelling"].includes(value)) return "queued";
+  return "unknown";
+}
+
+function runAttention(run) {
+  const status = String(run?.status || "unknown").toLowerCase();
+  if (["failed", "timed_out", "lost", "unknown"].includes(status)) return status;
+  if (!KNOWN.has(status)) return "unknown";
+  if (hasObservationAttention(run)) return "observation";
+  return undefined;
+}
+
+function relationForRun(run, options) {
+  if (options?.attached_run_id && run?.run_id === options.attached_run_id) return "attached";
+  const sessionId = normalizedSessionId(run);
+  if (options?.session_id && sessionId === options.session_id) return "current_session";
+  if (options?.project_root && run?.project_root === options.project_root) return "same_project";
+  return "other";
+}
+
+function updatedTime(run) {
+  const value = Date.parse(run?.updated_at || "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function presenceRank(item) {
+  if (item.relation === "attached") return 0;
+  if (item.relation === "current_session" && item.live) return 1;
+  if (item.relation === "current_session" && item.attention) return 2;
+  if (item.relation === "same_project" && item.live) return 3;
+  if (item.attention) return 4;
+  if (item.live) return 5;
+  return 9;
+}
+
+export function projectRunPresence(runs, options = {}) {
+  return (Array.isArray(runs) ? runs : [])
+    .map((run) => {
+      const execution = executionState(run?.status);
+      const relation = relationForRun(run, options);
+      return {
+        run_id: run?.run_id,
+        display_name: displayNameForRun(run),
+        relation,
+        execution,
+        live: execution === "running" || execution === "queued",
+        status: String(run?.status || "unknown").toLowerCase(),
+        runner: run?.runner,
+        durable_handle: run?.job_id,
+        elapsed_ms:
+          relation === "attached" && Number.isFinite(Number(options?.attached_elapsed_ms))
+            ? Math.max(0, Number(options.attached_elapsed_ms))
+            : undefined,
+        observation_health: run?.observation?.health,
+        continuation: run?.continuation || "none",
+        attention: runAttention(run),
+        updated_at: run?.updated_at,
+        session_id: normalizedSessionId(run),
+        project_root: run?.project_root,
+      };
+    })
+    .sort((a, b) => presenceRank(a) - presenceRank(b) || updatedTime(b) - updatedTime(a) || String(a.run_id).localeCompare(String(b.run_id)));
+}
+
+export function formatPresenceElapsed(elapsedMs) {
+  if (!Number.isFinite(Number(elapsedMs))) return "";
+  const seconds = Math.max(0, Math.floor(Number(elapsedMs) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h${remainder}m` : `${hours}h`;
+}
+
 export function summarizePiRunsStatus(
   runs,
   backend = "runwatch",
@@ -78,6 +159,7 @@ export function summarizePiRunsStatus(
     : [];
   const summary = summarizeRuns(currentRuns);
   const otherSummary = summarizeRuns(otherRuns);
+  const presence = projectRunPresence(allRuns, options);
   const pending = Number(deliveries?.pending || 0);
   const delivering = Number(deliveries?.delivering || 0);
   const retrying = Number(deliveries?.retrying || 0);
@@ -85,6 +167,29 @@ export function summarizePiRunsStatus(
   const continuation = pending + delivering + retrying;
   let text = summary.text;
   let tone = summary.tone;
+  if (currentSessionId) {
+    const primary =
+      presence.find((item) => item.relation === "attached" && (item.live || item.attention)) ||
+      presence.find((item) => item.relation === "current_session" && (item.live || item.attention)) ||
+      presence.find((item) => item.relation === "same_project" && (item.live || item.attention));
+    if (primary) {
+      const reconnecting = primary.relation === "attached" && options?.wait_state === "reconnecting";
+      const symbol = reconnecting
+        ? "↻"
+        : primary.attention
+          ? "⚠"
+          : primary.execution === "running"
+            ? "●"
+            : "○";
+      const elapsed = formatPresenceElapsed(primary.elapsed_ms);
+      text = `Runs ${symbol} ${primary.display_name}${elapsed ? ` ${elapsed}` : ""}${primary.relation === "attached" ? " [attached]" : primary.relation === "same_project" ? " [project]" : ""}`;
+      const additionalCurrentLive = presence.filter(
+        (item) => item !== primary && ["attached", "current_session"].includes(item.relation) && item.live,
+      ).length;
+      if (additionalCurrentLive > 0) text += ` · +${additionalCurrentLive} active`;
+      tone = reconnecting || primary.attention ? "warning" : "accent";
+    }
+  }
   const observationAttention = currentRuns.filter(hasObservationAttention).length;
   const otherObservationAttention = otherRuns.filter(hasObservationAttention).length;
 
@@ -94,12 +199,32 @@ export function summarizePiRunsStatus(
   }
 
   if (currentSessionId) {
-    const globalAttention = otherSummary.attention + otherObservationAttention;
+    const primaryRunId = presence.find(
+      (item) => ["attached", "current_session", "same_project"].includes(item.relation) && (item.live || item.attention),
+    )?.run_id;
+    const primaryIsOtherSession = Boolean(
+      primaryRunId && otherRuns.some((run) => run?.run_id === primaryRunId),
+    );
+    const primaryOtherAttention = primaryIsOtherSession
+      ? presence.find((item) => item.run_id === primaryRunId)?.attention
+        ? 1
+        : 0
+      : 0;
+    const primaryOtherLive = primaryIsOtherSession
+      ? presence.find((item) => item.run_id === primaryRunId)?.live
+        ? 1
+        : 0
+      : 0;
+    const globalAttention = Math.max(
+      0,
+      otherSummary.attention + otherObservationAttention - primaryOtherAttention,
+    );
+    const otherLive = Math.max(0, otherSummary.live - primaryOtherLive);
     if (globalAttention > 0) {
-      text += ` · ${globalAttention} global attention`;
+      text = text === "Runs idle" ? `Runs ${globalAttention} global attention` : `${text} · ${globalAttention} global attention`;
       tone = "warning";
-    } else if (otherSummary.live > 0) {
-      text += ` · ${otherSummary.live} other live`;
+    } else if (otherLive > 0) {
+      text = text === "Runs idle" ? `Runs ${otherLive} other live` : `${text} · ${otherLive} other live`;
     }
   }
 
@@ -129,5 +254,6 @@ export function summarizePiRunsStatus(
     continuation,
     needs_rebind: needsRebind,
     bridge_state: bridgeState,
+    presence,
   };
 }

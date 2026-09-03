@@ -4,7 +4,7 @@
 
 # pi-runs
 
-Pi integration for durable **Runs** managed by runwatch. Submit long scientific computation, end the active wait, and resume the same research workflow when the Run finishes.
+Pi integration for durable **Runs** managed by runwatch. Submit long scientific computation, either stay attached with familiar synchronous waiting or detach safely, and continue the same research workflow when the Run finishes.
 
 - 痛点：[docs/pain-points.md](docs/pain-points.md)
 - 设计：[docs/design.md](docs/design.md)
@@ -12,12 +12,12 @@ Pi integration for durable **Runs** managed by runwatch. Submit long scientific 
 
 `runwatchd` is the single durable Run Lifecycle Authority. The pre-runwatch local runner/wakeup implementation is archived under `legacy/` for historical migration/reference only and is no longer selectable by the active runtime; `PI_RUNS_BACKEND=legacy` fails closed. `pi-ssh-tools` remains the Pi-online remote workspace layer.
 
-## V1 scope freeze
+## Scope
 
-The current release target is deliberately limited to **Pi + pi-runs + runwatch**, with `pi-ssh-tools` providing Pi-online remote workspace access. The real Pi/provider/HPC continuation loop already works; current development is focused on installation/readiness, repeatable release acceptance, endurance testing and legacy retirement. Support for Codex or any other coding agent is deferred until this v1 path is complete and should live in a separate Agent Integration project rather than in pi-runs.
-The frozen v1 adapter/release contract is documented in `docs/V1_RELEASE_CANDIDATE.md`.
+The current `0.2.x` line remains deliberately limited to **Pi + pi-runs + runwatch**, with `pi-ssh-tools` providing Pi-online remote workspace access. The historical `v0.1.0` Pi/provider/HPC release contract is complete and remains frozen; post-release work improves long-wait and Run-presence UX without reopening legacy backends or adding other agents. Future Codex/Claude/Grok integrations should live in separate Agent Integration projects rather than expanding pi-runs or making runwatch agent-specific.
+The frozen `v0.1.0` adapter/release contract is documented in `docs/V1_RELEASE_CANDIDATE.md`.
 
-`sbatch` / `bsub` / process launch succeeding only means work was submitted. Unattended long scientific waits should be handed off durably instead of keeping Pi alive merely to poll; an explicit foreground run-to-completion request may stay attached with `runs_wait` without changing runwatch's ownership of the Run.
+`sbatch` / `bsub` / process launch succeeding only means work was submitted. Foreground/background is chosen by dependency rather than duration: if the next reasoning step needs the result, Pi can stay attached with `runs_wait` until terminal even for a long job; explicit concurrency or unattended work detaches while runwatch keeps owning the same durable Run.
 
 ## Install
 
@@ -31,15 +31,17 @@ pi install /path/to/pi-runs
 | Tool | Role |
 |---|---|
 | `runs_doctor` | read-only Pi v1 readiness: runwatch protocol/service/storage/capabilities/backend selection |
-| `runs_submit` | durable hand-off; return `run_id` + execution status/handle |
-| `runs_wait` | foreground observer for an existing durable Run; explicit run-to-completion wait with progress, timeout/abort detach only |
+| `runs_submit` | durable hand-off; return `run_id`, stable human `display_name`, and execution status/handle |
+| `runs_wait` | foreground observer for an existing durable Run; omitted timeout waits to condition/terminal with progress + reconnect, detach/abort never cancels |
 | `runs_status` | canonical runwatch snapshot; fails closed if the durable control plane is unavailable |
 | `runs_logs` | tail |
 | `runs_harvest` | record artifacts |
 | `runs_cancel` | durable scancel / bkill / Local Process cancellation request through runwatch |
 | `runs_rebind` | explicitly attach a branch-blocked completion to the current Pi session branch |
 
-`runs_wait` is an observation lifecycle, not a Run lifecycle. It defaults to a 30-second attachment, accepts `until=terminal|running`, emits progress on bounded slices (5 seconds by default), and caps one foreground attachment at 24 hours. A timeout or Escape/Abort ends only the watcher; the durable Run keeps executing until it reaches terminal state or `runs_cancel` is explicitly requested. For hours-to-days unattended work, `runs_submit` + durable continuation remains the default because Pi can exit completely.
+`runs_wait` is an observation lifecycle, not a Run lifecycle. It accepts `until=terminal|running`; when `timeout_ms` is omitted there is no user-level deadline, while each local IPC observation remains a bounded slice (5 seconds by default). Transient runwatch transport loss is surfaced as `reconnecting` with bounded backoff. An explicit timeout, Escape, Abort, or `/runs detach` ends only the watcher; the durable Run keeps executing until terminal or an explicit `runs_cancel` request.
+
+`runs_submit.name` is optional. pi-runs resolves every submitted Run to a short stable human label: explicit names are normalized, safe script/task semantics are used when available, otherwise a deterministic mnemonic such as `quiet-cedar` is generated. Unsafe paths/URLs/high-entropy tokens are not copied into generated names. `run_id` remains the authoritative identity; the display name is persisted with the Run and survives Pi/runwatch restart and scheduler retries.
 
 ## Pi v1 release acceptance
 
@@ -59,14 +61,14 @@ For resident fault/endurance qualification, use the same real-provider contract 
 While an interactive Pi session is active, pi-runs publishes a compact composable status entry such as:
 
 ```text
-Runs 2 running · 1 queued
-Runs 1 running · 1 failed
-Runs idle
-Runs 1 running · 1 continuation
+Runs ● full-tests 18m [attached]
+Runs ● reconstruction [project] · 1 other live
+Runs ⚠ mask-fit · 1 probe issue
+Runs 2 other live
 Runs idle · 1 rebind
 ```
 
-The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. The active v1 status surface is runwatch-only; durable-control-plane failures are shown as attention rather than switching ledgers. Current-session continuation work adds `continuation`, `rebind`, `session busy`, or `bridge offline` attention without filling the footer with historical successes.
+The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. Active or attention-worthy Runs remain visible when the user switches away and comes back; same-project work is named when space permits, unrelated work is compressed to counts, and multi-Run/attention state gets a compact widget. `/runs` refreshes that dashboard and `/runs detach` converts the current foreground watcher to background without cancelling the Run. Terminal transitions for detached current-session work are coalesced/deduplicated as UI notifications; exact-session durable Delivery remains the continuation authority.
 
 ## Backend safety
 
@@ -82,8 +84,8 @@ For remote Slurm/LSF, `workdir` is a **shared durable workspace contract**, not 
 
 For runwatch-backed Runs — Windows Local Process or remote Slurm/LSF — `runs_submit` durably captures the current Pi session file/id/origin leaf together with the Run submission intent. When it returns:
 
-- `continuation=live_armed`: stop actively waiting and leave Pi running. runwatch will deliver terminal completion back as a Pi follow-up.
-- `continuation=armed`: runwatch advertises offline Pi continuation; the binding is durable and the Pi process may exit. The daemon can relaunch the exact recorded session through a headless RPC worker when no live lease remains.
+- `continuation=live_armed`: a live Pi continuation path is armed. If the workflow detaches, leave Pi running and runwatch can deliver terminal completion as a follow-up; if the next reasoning step depends on the Run, `runs_wait` may remain attached instead.
+- `continuation=armed`: runwatch advertises offline Pi continuation and the binding is durable. A detached workflow may let the Pi process exit completely and the daemon can relaunch the exact recorded session through a headless RPC worker; foreground `runs_wait` remains valid when the current step depends on completion.
 - `continuation=binding_persisted_delivery_pending`: the binding is durable, but no live/offline continuation is currently armed; do not assume automatic resume.
 
 If the user changes the active branch of the same Pi session while a Run is waiting, completion is blocked as `needs_rebind` instead of being injected into the wrong research branch. `runs_rebind` explicitly moves that Run to the current branch and refreshes the durable Delivery binding snapshot. The repeatable real Pi gate uses `SessionManager.branch()` to create a sibling branch, proves zero wrong-branch completion/settlement, then invokes the actual `runs_rebind` tool and validates that the final binding leaf is a descendant of the generated branch marker.

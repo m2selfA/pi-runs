@@ -58,7 +58,7 @@ Slurm / LSF JobID、PowerShell instance id 只是句柄。一次科研迭代还�
 
 让模型在 bash 里轮询会烧掉上下文和工具配额、超时策略不统一，而且 Pi 一关循环就没了。
 
-把等待包装进 `runs_wait` 可以是合理的 foreground UX：例如用户明确要求“等这个测试跑完再汇报”，Pi 可以在一个可观察、可取消的 tool call 里附着数分钟甚至更久。但 watcher 仍绑定当前 Pi 进程，因此它**不能成为 durable ownership**。默认无人值守长任务仍应走 `runs_submit -> continuation armed -> 当前 turn 结束`，由独立 runwatchd 在后台观察；`runs_wait` 只是可随时 detach 的前台观察窗口，timeout/Escape/Abort 都不得取消 Run。
+把等待包装进 `runs_wait` 可以恢复用户已经熟悉的同步 UX：如果下一步推理必须等结果，Pi 可以在一个可观察、可取消、可重连的 tool call 里一直附着到 terminal，任务跑几分钟还是几小时都不应迫使用户学习另一套操作。watcher 仍绑定当前 Pi 进程，因此它**不能成为 durable ownership**；真正的 Run 始终先由 runwatch 持久化。只有用户明确要并发/无人值守，或 Pi 有真正独立的工作可做时才 detach。timeout/Escape/Abort/`/runs detach` 都只结束 watcher，不得取消 Run；同步和异步 Run 都通过 footer/widget 维持持续可发现性。
 
 ### 5. 只做 Slurm 不够
 

@@ -2,15 +2,51 @@ import net from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { displayNameForRun } from "./naming.mjs";
 
 const CLIENT_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 750;
-const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_WAIT_UPDATE_INTERVAL_MS = 5_000;
-const MAX_WAIT_TIMEOUT_MS = 86_400_000;
 const MIN_WAIT_UPDATE_INTERVAL_MS = 1_000;
 const MAX_WAIT_UPDATE_INTERVAL_MS = 30_000;
-const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const INITIAL_WAIT_RECONNECT_BACKOFF_MS = 250;
+const MAX_WAIT_RECONNECT_BACKOFF_MS = 5_000;
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "timed_out", "cancelled", "lost"]);
+
+function clientError(kind, message, cause) {
+  const error = new Error(message);
+  error.name = "RunwatchClientError";
+  error.runwatch_kind = kind;
+  if (cause && typeof cause === "object" && "code" in cause) error.code = cause.code;
+  return error;
+}
+
+export function isTransientRunwatchTransportError(error) {
+  return error?.runwatch_kind === "transport";
+}
+
+function abortError() {
+  return clientError("aborted", "runwatch IPC request aborted");
+}
+
+function sleepWithSignal(delayMs, signal) {
+  if (delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = () => finish(abortError());
+    const timer = setTimeout(() => finish(), delayMs);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export function endpoint(env = process.env) {
   if (env.RUNWATCH_ENDPOINT) return env.RUNWATCH_ENDPOINT;
@@ -35,9 +71,9 @@ export function request(op, payload = {}, options = {}) {
       if (err) reject(err);
       else resolve(value);
     };
-    const onAbort = () => finish(new Error("runwatch IPC request aborted"));
+    const onAbort = () => finish(abortError());
     const timer = setTimeout(
-      () => finish(new Error(`runwatch IPC timeout after ${timeoutMs} ms`)),
+      () => finish(clientError("transport", `runwatch IPC timeout after ${timeoutMs} ms`)),
       timeoutMs,
     );
 
@@ -54,22 +90,29 @@ export function request(op, payload = {}, options = {}) {
       try {
         response = JSON.parse(line);
       } catch (err) {
-        finish(new Error(`invalid runwatch IPC response: ${err.message}`));
+        finish(clientError("protocol", `invalid runwatch IPC response: ${err.message}`, err));
         return;
       }
       if (response.id !== id) {
-        finish(new Error(`runwatch IPC response id mismatch: expected ${id}, got ${response.id}`));
+        finish(
+          clientError(
+            "protocol",
+            `runwatch IPC response id mismatch: expected ${id}, got ${response.id}`,
+          ),
+        );
         return;
       }
       if (!response.ok) {
-        finish(new Error(response.error || `runwatch IPC ${op} failed`));
+        finish(clientError("remote", response.error || `runwatch IPC ${op} failed`));
         return;
       }
       finish(null, response.result);
     });
-    socket.on("error", (err) => finish(err));
+    socket.on("error", (err) =>
+      finish(clientError("transport", err instanceof Error ? err.message : String(err), err)),
+    );
     socket.on("end", () => {
-      if (!settled) finish(new Error("runwatch IPC closed without a response"));
+      if (!settled) finish(clientError("transport", "runwatch IPC closed without a response"));
     });
 
     if (options.signal) {
@@ -186,6 +229,10 @@ export function buildSubmitSpec(req) {
   };
 }
 
+function withDisplayName(run) {
+  return run ? { ...run, display_name: displayNameForRun(run) } : run;
+}
+
 export async function submitRun(req, options = {}) {
   const spec = buildSubmitSpec(req);
   const result = await request(
@@ -196,7 +243,7 @@ export async function submitRun(req, options = {}) {
   const run = result?.run;
   if (!run?.run_id) throw new Error("runwatch submit returned no Run");
   return {
-    ...run,
+    ...withDisplayName(run),
     wakeup: "runwatch",
     handle: run.job_id ? { kind: run.runner, jobId: run.job_id } : undefined,
     continuation_binding_persisted: Boolean(spec.continuation),
@@ -285,10 +332,10 @@ export async function rebindContinuation(runId, binding, options = {}) {
 }
 
 export function normalizeWaitOptions(options = {}) {
-  const rawTimeout = options.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS;
-  const timeoutMs = Number(rawTimeout);
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    throw new Error(`invalid runs_wait timeout_ms=${rawTimeout}; expected a non-negative finite number`);
+  const hasTimeout = options.timeout_ms !== undefined && options.timeout_ms !== null;
+  const timeoutMs = hasTimeout ? Number(options.timeout_ms) : null;
+  if (hasTimeout && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
+    throw new Error(`invalid runs_wait timeout_ms=${options.timeout_ms}; expected a non-negative finite number`);
   }
 
   const rawInterval = options.interval_ms ?? DEFAULT_WAIT_UPDATE_INTERVAL_MS;
@@ -303,7 +350,7 @@ export function normalizeWaitOptions(options = {}) {
   }
 
   return {
-    timeoutMs: Math.min(MAX_WAIT_TIMEOUT_MS, Math.floor(timeoutMs)),
+    timeoutMs: timeoutMs === null ? null : Math.floor(timeoutMs),
     intervalMs: Math.min(
       MAX_WAIT_UPDATE_INTERVAL_MS,
       Math.max(MIN_WAIT_UPDATE_INTERVAL_MS, Math.floor(intervalMs)),
@@ -322,37 +369,115 @@ export async function waitRun(runId, options = {}) {
   const { timeoutMs, intervalMs, until } = normalizeWaitOptions(options);
   const startedAt = Date.now();
   let iteration = 0;
+  let reconnectAttempt = 0;
+  let reconnectCount = 0;
+  let lastRun;
 
   while (true) {
     const elapsedBeforeSlice = Math.max(0, Date.now() - startedAt);
-    const remainingMs = Math.max(0, timeoutMs - elapsedBeforeSlice);
-    const sliceMs = timeoutMs === 0 ? 0 : Math.min(intervalMs, remainingMs);
+    const remainingMs =
+      timeoutMs === null ? Number.POSITIVE_INFINITY : Math.max(0, timeoutMs - elapsedBeforeSlice);
+    const sliceMs =
+      timeoutMs === 0
+        ? 0
+        : timeoutMs === null
+          ? intervalMs
+          : Math.min(intervalMs, remainingMs);
     const timeoutSec =
-      sliceMs === 0 ? 0 : Math.min(86_400, Math.max(1, Math.ceil(sliceMs / 1000)));
-    const result = await request(
-      "wait_run",
-      { run_id: runId, timeout_sec: timeoutSec },
-      { ...options, timeout_ms: Math.max(2_000, sliceMs + 2_000) },
-    );
+      sliceMs === 0
+        ? 0
+        : timeoutMs === null
+          ? Math.min(86_400, Math.max(1, Math.ceil(sliceMs / 1000)))
+          : Math.min(86_400, Math.max(0, Math.floor(sliceMs / 1000)));
+    const requestTimeoutMs =
+      timeoutMs === null
+        ? Math.max(2_000, sliceMs + 2_000)
+        : timeoutSec > 0
+          ? Math.max(250, Math.min(remainingMs + 100, timeoutSec * 1_000 + 500))
+          : Math.max(100, Math.min(750, remainingMs + 100));
+    let result;
+    try {
+      result = await request(
+        "wait_run",
+        { run_id: runId, timeout_sec: timeoutSec },
+        { ...options, timeout_ms: requestTimeoutMs },
+      );
+    } catch (error) {
+      if (options.signal?.aborted || error?.runwatch_kind === "aborted") throw error;
+      if (!isTransientRunwatchTransportError(error)) throw error;
+
+      reconnectAttempt += 1;
+      reconnectCount += 1;
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const timedOut = timeoutMs !== null && elapsedMs >= timeoutMs;
+      if (timedOut) {
+        if (!lastRun) {
+          throw clientError(
+            "transport",
+            `runs_wait timed out after ${timeoutMs} ms while runwatch was unavailable: ${error.message}`,
+            error,
+          );
+        }
+        return {
+          ...withDisplayName(lastRun),
+          wait_observation: {
+            until,
+            outcome: "timeout",
+            elapsed_ms: elapsedMs,
+            timeout_ms: timeoutMs,
+            interval_ms: intervalMs,
+            iterations: iteration,
+            reconnects: reconnectCount,
+          },
+        };
+      }
+
+      const backoffMs = Math.min(
+        MAX_WAIT_RECONNECT_BACKOFF_MS,
+        INITIAL_WAIT_RECONNECT_BACKOFF_MS * 2 ** Math.min(reconnectAttempt - 1, 8),
+      );
+      const boundedBackoffMs =
+        timeoutMs === null ? backoffMs : Math.min(backoffMs, Math.max(0, timeoutMs - elapsedMs));
+      options.on_update?.({
+        run: lastRun,
+        state: "reconnecting",
+        until,
+        condition_met: false,
+        elapsed_ms: elapsedMs,
+        timeout_ms: timeoutMs,
+        interval_ms: intervalMs,
+        iteration,
+        reconnect_attempt: reconnectAttempt,
+        reconnect_count: reconnectCount,
+        retry_in_ms: boundedBackoffMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleepWithSignal(boundedBackoffMs, options.signal);
+      continue;
+    }
     if (!result?.run) throw new Error(`unknown run ${runId}`);
 
+    lastRun = result.run;
     iteration += 1;
+    reconnectAttempt = 0;
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     const conditionMet = waitConditionMet(result.run, until);
-    const timedOut = timeoutMs === 0 || elapsedMs >= timeoutMs;
+    const timedOut = timeoutMs !== null && (timeoutMs === 0 || elapsedMs >= timeoutMs);
     options.on_update?.({
       run: result.run,
+      state: "observing",
       until,
       condition_met: conditionMet,
       elapsed_ms: elapsedMs,
       timeout_ms: timeoutMs,
       interval_ms: intervalMs,
       iteration,
+      reconnect_count: reconnectCount,
     });
 
     if (conditionMet || timedOut) {
       return {
-        ...result.run,
+        ...withDisplayName(result.run),
         wait_observation: {
           until,
           outcome: conditionMet ? "condition_met" : "timeout",
@@ -360,14 +485,23 @@ export async function waitRun(runId, options = {}) {
           timeout_ms: timeoutMs,
           interval_ms: intervalMs,
           iterations: iteration,
+          reconnects: reconnectCount,
         },
       };
+    }
+
+    if (timeoutMs !== null && timeoutSec === 0) {
+      const remainingAfterSnapshot = Math.max(0, timeoutMs - elapsedMs);
+      if (remainingAfterSnapshot > 0) {
+        await sleepWithSignal(remainingAfterSnapshot, options.signal);
+      }
     }
   }
 }
 
 function attachObservation(run, observation) {
-  return observation ? { ...run, observation } : run;
+  const named = withDisplayName(run);
+  return observation ? { ...named, observation } : named;
 }
 
 function attachObservationList(runs, observations) {
@@ -401,7 +535,7 @@ export async function logsRun(runId, tail = 80, options = {}) {
 export async function cancelRun(runId, options = {}) {
   const result = await request("cancel_run", { run_id: runId }, options);
   if (!result?.run) throw new Error(`runwatch cancel returned no Run for ${runId}`);
-  return { ...result.run, cancel_requested: Boolean(result.cancel_requested) };
+  return { ...withDisplayName(result.run), cancel_requested: Boolean(result.cancel_requested) };
 }
 
 export async function harvestRun(runId, options = {}) {

@@ -147,7 +147,7 @@ Pi
   -> continue reasoning in the same turn
 ```
 
-`runs_wait(run_id)` should therefore evolve from P1's 24-hour attachment cap to **no user-level deadline by default**. Omitted `timeout_ms` means "wait until the requested condition or user detach". An explicit timeout remains available for bounded checks; `until=running` remains useful for launch gates, while the normal default is `until=terminal`.
+`runs_wait(run_id)` now implements the P2 target: there is **no user-level deadline by default**. Omitted `timeout_ms` means "wait until the requested condition or user detach". An explicit timeout remains available for bounded checks; `until=running` remains useful for launch gates, while the normal default is `until=terminal`.
 
 An unbounded user wait must **not** create an unbounded transport operation. It is implemented as bounded local-IPC observation slices over the already-durable Run:
 
@@ -183,12 +183,12 @@ A user should be able to start with the familiar synchronous mode and change the
 foreground wait
   -> user keeps waiting: nothing new to learn
   -> user presses Escape: current Pi turn may abort, watcher disappears, Run survives
-  -> future UX: /runs detach (or equivalent immediate UI action)
-       detaches only the active watcher without aborting the whole agent turn
+  -> /runs detach
+       detaches only the active watcher without aborting/cancelling the durable Run
   -> footer/widget continues to show the Run as active
 ```
 
-The future `/runs` command is a **user UI command**, not a ninth model-facing Run tool and not another lifecycle authority.
+The `/runs` command is a **user UI command**, not a ninth model-facing Run tool and not another lifecycle authority. `/runs` refreshes an expanded presence dashboard; `/runs detach` aborts only the watcher-specific controller.
 
 This command also solves a Pi-specific interaction detail: ordinary steering messages are queued until the current assistant tool batch finishes, while extension commands can execute immediately during streaming. An in-flight watcher should therefore have its own abort controller registered by Run id so `/runs detach` can abort that watcher only, let `runs_wait` return a detached observation, and allow the agent turn to continue without sending `runs_cancel`.
 
@@ -261,7 +261,7 @@ Runs
 ! mask-fit        failed   11m ago                    attention
 ```
 
-A future `/runs` interactive command opens the complete list and actions (`attach`, `detach`, `logs`, explicit `cancel`, `rebind` where legal). This is user-facing navigation; model-facing tools stay frozen.
+The implemented `/runs` user command expands the presence list (up to twelve prioritized rows), and `/runs detach` provides the immediate foreground-to-background action. Additional user-only convenience actions such as attach/logs/cancel/rebind may be layered on later, but model-facing tools stay frozen and lifecycle authority remains in runwatch.
 
 ### Layer 4 — terminal transition notification
 

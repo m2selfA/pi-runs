@@ -17,6 +17,7 @@ import {
   rebindRun,
 } from "../../src/backend.mjs";
 import { summarizePiRunsStatus } from "../../src/status.mjs";
+import { displayNameForRun, resolveRunDisplayName } from "../../src/naming.mjs";
 import {
   ackDelivery,
   claimDeliveries,
@@ -35,7 +36,9 @@ import {
 } from "../../src/continuation.mjs";
 
 const STATUS_KEY = "pi-runs";
+const WIDGET_KEY = "pi-runs-presence";
 const STATUS_REFRESH_MS = 10_000;
+const MAX_TRACKED_RUN_STATUSES = 256;
 const ADAPTER_PATH = fileURLToPath(import.meta.url);
 
 function offlineBootstrapPayload() {
@@ -55,18 +58,64 @@ function jsonResult(data: unknown) {
   };
 }
 
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>) {
+  const active = signals.filter(Boolean) as AbortSignal[];
+  if (active.length === 0) return { signal: undefined, cleanup: () => {} };
+  if (active.length === 1) return { signal: active[0], cleanup: () => {} };
+  const controller = new AbortController();
+  const listeners = active.map((signal) => {
+    const listener = () => controller.abort();
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", listener, { once: true });
+    return { signal, listener };
+  });
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const { signal, listener } of listeners) signal.removeEventListener("abort", listener);
+    },
+  };
+}
+
+function presenceWidgetLines(presence: any[], maxRows = 4) {
+  const visible = (Array.isArray(presence) ? presence : [])
+    .filter((item) => item?.live || item?.attention)
+    .slice(0, maxRows);
+  if (visible.length < 2 && !visible.some((item) => item?.attention)) return undefined;
+  const lines = ["Runs"];
+  for (const item of visible) {
+    const symbol = item.relation === "attached" ? "▶" : item.attention ? "!" : item.execution === "running" ? "●" : "○";
+    const handle = item.durable_handle ? `${item.runner || "job"} #${item.durable_handle}` : item.runner || "";
+    const relation = item.relation === "attached"
+      ? "attached"
+      : item.relation === "same_project"
+        ? "project"
+        : item.relation === "other"
+          ? "other"
+          : "";
+    lines.push(`${symbol} ${item.display_name}  ${item.status}${handle ? `  ${handle}` : ""}${relation ? `  ${relation}` : ""}`);
+  }
+  return lines;
+}
+
 function waitProgressResult(runId: string, progress: any) {
   const run = progress?.run;
+  const displayName = displayNameForRun(run || { run_id: runId });
   const status = typeof run?.status === "string" ? run.status : "unknown";
   const elapsedMs = Number(progress?.elapsed_ms || 0);
   const elapsed = elapsedMs < 10_000 ? `${(elapsedMs / 1000).toFixed(1)}s` : `${Math.round(elapsedMs / 1000)}s`;
+  const reconnecting = progress?.state === "reconnecting";
   const handle = run?.job_id ? ` · ${run.runner || "job"} ${run.job_id}` : run?.runner ? ` · ${run.runner}` : "";
-  const condition = progress?.condition_met ? ` · ${progress.until} reached` : ` · waiting for ${progress?.until || "terminal"}`;
+  const condition = reconnecting
+    ? ` · reconnecting${progress?.retry_in_ms ? ` in ${progress.retry_in_ms}ms` : ""}`
+    : progress?.condition_met
+      ? ` · ${progress.until} reached`
+      : ` · waiting for ${progress?.until || "terminal"}`;
   return {
     content: [
       {
         type: "text",
-        text: `Run ${runId}: ${status}${handle} · elapsed ${elapsed}${condition}. Escape/abort detaches this foreground wait; the durable Run is not cancelled.`,
+        text: `${displayName}: ${status}${handle} · elapsed ${elapsed}${condition}. Escape/abort detaches this foreground wait; the durable Run is not cancelled.`,
       },
     ],
     details: {
@@ -75,12 +124,17 @@ function waitProgressResult(runId: string, progress: any) {
       runner: run?.runner,
       job_id: run?.job_id,
       wait: {
+        state: progress?.state || "observing",
         until: progress?.until,
         condition_met: Boolean(progress?.condition_met),
         elapsed_ms: elapsedMs,
         timeout_ms: progress?.timeout_ms,
         interval_ms: progress?.interval_ms,
         iteration: progress?.iteration,
+        reconnect_count: progress?.reconnect_count || 0,
+        reconnect_attempt: progress?.reconnect_attempt,
+        retry_in_ms: progress?.retry_in_ms,
+        error: reconnecting ? progress?.error : undefined,
       },
     },
   };
@@ -106,20 +160,88 @@ export default function (pi: ExtensionAPI) {
   let liveSettledPendingAck = false;
   let liveAgentOutcome: { ok: boolean; error?: string } | undefined;
   let agentActive = false;
+  let activeWatcher: {
+    runId: string;
+    state: "observing" | "reconnecting";
+    startedAt: number;
+    elapsedMs: number;
+    controller: AbortController;
+    lastRun?: any;
+  } | undefined;
+  let statusBaselineReady = false;
+  const lastKnownRunStatuses = new Map<string, string>();
+  const foregroundCompletionSuppression = new Set<string>();
 
   const refreshStatus = async (ctx: ExtensionContext) => {
     if (!ctx.hasUI || statusRefreshInFlight) return;
     statusRefreshInFlight = true;
     try {
       const overview = await statusOverview({ timeout_ms: 650 });
+      const sessionId = ctx.sessionManager.getSessionId();
       const summary = summarizePiRunsStatus(
         overview.runs,
         overview.backend,
         bridgeDeliveries,
         bridgeState,
-        { session_id: ctx.sessionManager.getSessionId() },
+        {
+          session_id: sessionId,
+          project_root: ctx.sessionManager.getCwd(),
+          attached_run_id: activeWatcher?.runId,
+          attached_elapsed_ms: activeWatcher?.elapsedMs,
+          wait_state: activeWatcher?.state,
+        },
       );
-      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(summary.tone, summary.text));
+      const hasPresence = Boolean(
+        summary.live ||
+        summary.attention ||
+        summary.other_live ||
+        summary.global_attention ||
+        summary.continuation ||
+        summary.needs_rebind ||
+        activeWatcher ||
+        bridgeState === "busy" ||
+        bridgeState === "offline",
+      );
+      ctx.ui.setStatus(
+        STATUS_KEY,
+        hasPresence ? ctx.ui.theme.fg(summary.tone, summary.text) : undefined,
+      );
+      ctx.ui.setWidget(WIDGET_KEY, presenceWidgetLines(summary.presence));
+
+      const terminalTransitions = [];
+      const currentSessionRuns = (Array.isArray(overview.runs) ? overview.runs : [])
+        .filter((run) => run?.session_id === sessionId)
+        .sort((a, b) => Date.parse(b?.updated_at || "") - Date.parse(a?.updated_at || ""))
+        .slice(0, MAX_TRACKED_RUN_STATUSES);
+      const trackedIds = new Set(currentSessionRuns.map((run) => String(run?.run_id || "")));
+      for (const runId of lastKnownRunStatuses.keys()) {
+        if (!trackedIds.has(runId)) lastKnownRunStatuses.delete(runId);
+      }
+      for (const run of currentSessionRuns) {
+        const runId = String(run?.run_id || "");
+        const next = String(run?.status || "unknown").toLowerCase();
+        const previous = lastKnownRunStatuses.get(runId);
+        lastKnownRunStatuses.set(runId, next);
+        if (!statusBaselineReady || !previous || previous === next) continue;
+        if (activeWatcher?.runId === runId) continue;
+        if (["succeeded", "failed", "timed_out", "cancelled", "lost"].includes(next)) {
+          if (foregroundCompletionSuppression.delete(runId)) continue;
+          terminalTransitions.push({ run, status: next });
+        }
+      }
+      statusBaselineReady = true;
+      if (terminalTransitions.length === 1) {
+        const item = terminalTransitions[0];
+        const label = displayNameForRun(item.run);
+        const notifyType = ["failed", "timed_out", "lost"].includes(item.status) ? "warning" : "info";
+        ctx.ui.notify(`${label}: ${item.status}`, notifyType);
+      } else if (terminalTransitions.length > 1) {
+        const failed = terminalTransitions.filter((item) => ["failed", "timed_out", "lost"].includes(item.status)).length;
+        ctx.ui.notify(
+          `${terminalTransitions.length} Runs completed${failed ? ` · ${failed} failed` : ""}`,
+          failed ? "warning" : "info",
+        );
+      }
     } catch {
       ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "Runs unavailable"));
     } finally {
@@ -454,7 +576,10 @@ export default function (pi: ExtensionAPI) {
   const stopStatusLoop = (ctx?: ExtensionContext) => {
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = undefined;
-    if (ctx?.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
+    if (ctx?.hasUI) {
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+      ctx.ui.setWidget(WIDGET_KEY, undefined);
+    }
   };
 
   const startStatusLoop = (ctx: ExtensionContext) => {
@@ -526,14 +651,27 @@ export default function (pi: ExtensionAPI) {
       "For remote Slurm/LSF work prepared with pi-ssh-tools, pass the ssh_status Host alias as host and its remote cwd as workdir; do not submit with ssh_bash and register afterwards.",
       "For remote scheduler Runs, choose a persistent shared workdir visible at the same path from login and compute nodes; never default to node-local /tmp or scratch merely because it exists on the SSH host.",
       "For long local Windows computation, omit host and use runner=process (or leave runner=auto); pi-runs defaults workdir to the current Pi cwd and runwatch owns the detached process lifecycle.",
-      "After durable continuation is armed, normally end the turn instead of waiting. Use runs_wait when the user explicitly wants foreground run-to-completion observation; aborting that watcher never cancels the durable Run.",
+      "Choose foreground/background by dependency, not duration: when the next reasoning step needs this result, call runs_wait with no timeout and wait to terminal; detach/end the turn only for explicit concurrency or unattended work. Aborting the watcher never cancels the durable Run.",
     ],
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const options = { signal };
       const runId = params.run_id || `pi_${String(toolCallId).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}`;
       const normalized = normalizeSubmitRequest(params, ctx.sessionManager.getCwd());
+      let existingRuns: any[] = [];
+      try {
+        existingRuns = await statusRun(undefined, { signal });
+      } catch {
+        // Naming must not become a second availability gate; runs_submit itself remains authoritative.
+      }
+      const resolvedName = resolveRunDisplayName({
+        requestedName: normalized.name,
+        command: normalized.command,
+        runId,
+        existingRuns,
+      });
       const request = {
         ...normalized,
+        name: resolvedName.name,
         run_id: runId,
         _continuation: continuationBinding(ctx, normalized),
       };
@@ -549,6 +687,7 @@ export default function (pi: ExtensionAPI) {
       if (rec.continuation_binding_persisted) {
         await syncLiveBridge(ctx);
       }
+      lastKnownRunStatuses.set(rec.run_id, String(rec.status || "unknown").toLowerCase());
       void refreshStatus(ctx);
       const liveContinuationArmed =
         Boolean(rec.continuation_binding_persisted) && bridgeState === "ok";
@@ -558,6 +697,8 @@ export default function (pi: ExtensionAPI) {
         backend.runwatch?.capabilities?.includes("offline_pi_continuation");
       return jsonResult({
         run_id: rec.run_id,
+        name: rec.name || request.name,
+        display_name: rec.name || request.name,
         status: rec.status,
         runner: rec.runner,
         wakeup: rec.wakeup,
@@ -585,11 +726,11 @@ export default function (pi: ExtensionAPI) {
     name: "runs_wait",
     label: "Wait for run",
     description:
-      "Foreground observer for an existing durable Run. It may stay attached for an explicit run-to-completion workflow, reports periodic progress, and can wait for running or terminal state. Timeout or Escape/abort detaches only this watcher; cancelling the scientific Run requires runs_cancel.",
+      "Foreground observer for an existing durable Run. With timeout_ms omitted it stays attached until the requested condition, even for very long jobs, while using bounded reconnectable IPC slices. Explicit timeout or Escape/abort detaches only this watcher; cancelling the scientific Run requires runs_cancel.",
     promptSnippet: "Stay attached to a durable Run when the user explicitly wants run-to-completion observation",
     promptGuidelines: [
       "Long scientific Runs still default to runs_submit plus durable continuation so Pi may exit completely.",
-      "Use runs_wait when foreground waiting is itself the requested workflow, including minutes-long run-to-completion checks; keep it observable and cancellable rather than silently polling.",
+      "Use runs_wait when the next reasoning step depends on this Run. Omit timeout_ms for the familiar run-to-completion experience even when the Run may take hours; transient runwatch transport loss is surfaced as reconnecting rather than cancelling the Run.",
       "A runs_wait timeout or Escape/abort only detaches the foreground watcher. Never claim that the Run was cancelled unless runs_cancel was explicitly called and runwatch later confirms terminal cancellation.",
     ],
     parameters: Type.Object({
@@ -598,24 +739,82 @@ export default function (pi: ExtensionAPI) {
         Type.Literal("terminal"),
         Type.Literal("running"),
       ], { description: "Condition to observe. running is also satisfied by a terminal state so fast Runs are not missed; default terminal." })),
-      timeout_ms: Type.Optional(Type.Number({ description: "Total foreground attachment budget in milliseconds. Default 30000; capped at 24 hours. Timeout detaches the watcher and does not cancel the Run." })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Optional total foreground attachment budget in milliseconds. Omit to wait until the requested condition with no user-level deadline. An explicit timeout detaches the watcher and does not cancel the Run." })),
       interval_ms: Type.Optional(Type.Number({ description: "Progress-update slice in milliseconds. Default 5000; clamped to 1000..30000." })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
+      const watcherController = new AbortController();
+      const combined = combineAbortSignals(signal, watcherController.signal);
+      let initialRun: any | undefined;
+      try {
+        initialRun = await statusRun(params.run_id, { signal, timeout_ms: 900 });
+      } catch {
+        // The sliced foreground watcher owns reconnect semantics; a failed preview must not block it.
+      }
+      activeWatcher = {
+        runId: params.run_id,
+        state: "observing",
+        startedAt: Date.now(),
+        elapsedMs: 0,
+        controller: watcherController,
+        lastRun: initialRun,
+      };
+      const initialLabel = displayNameForRun(initialRun || { run_id: params.run_id });
       onUpdate?.({
-        content: [{ type: "text", text: `Attached to Run ${params.run_id}; waiting for ${params.until || "terminal"}. Escape/abort detaches this watcher without cancelling the durable Run.` }],
-        details: { run_id: params.run_id, wait: { until: params.until || "terminal", attached: true } },
+        content: [{ type: "text", text: `${initialLabel}: attached; waiting for ${params.until || "terminal"}. Escape or /runs detach stops only this watcher without cancelling the durable Run.` }],
+        details: { run_id: params.run_id, display_name: initialLabel, wait: { until: params.until || "terminal", attached: true } },
       });
-      const result = await waitRun(
-        params.run_id,
-        {
-          ...params,
-          on_update: (progress: any) => onUpdate?.(waitProgressResult(params.run_id, progress)),
-        },
-        { signal },
-      );
       void refreshStatus(ctx);
-      return jsonResult(result);
+      try {
+        const result = await waitRun(
+          params.run_id,
+          {
+            ...params,
+            on_update: (progress: any) => {
+              if (activeWatcher?.runId === params.run_id) {
+                activeWatcher.state = progress?.state === "reconnecting" ? "reconnecting" : "observing";
+                activeWatcher.elapsedMs = Number(progress?.elapsed_ms || 0);
+                if (progress?.run) activeWatcher.lastRun = progress.run;
+              }
+              onUpdate?.(waitProgressResult(params.run_id, progress));
+              void refreshStatus(ctx);
+            },
+          },
+          { signal: combined.signal },
+        );
+        if (["succeeded", "failed", "timed_out", "cancelled", "lost"].includes(String(result?.status || "").toLowerCase())) {
+          foregroundCompletionSuppression.add(params.run_id);
+          if (foregroundCompletionSuppression.size > 32) {
+            const oldest = foregroundCompletionSuppression.values().next().value;
+            if (oldest) foregroundCompletionSuppression.delete(oldest);
+          }
+        }
+        return jsonResult(result);
+      } catch (err) {
+        if (watcherController.signal.aborted && !signal?.aborted) {
+          let run = activeWatcher?.lastRun;
+          if (!run) {
+            try {
+              run = await statusRun(params.run_id, { signal });
+            } catch {
+              run = { run_id: params.run_id, status: "unknown" };
+            }
+          }
+          return jsonResult({
+            ...run,
+            wait_observation: {
+              until: params.until || "terminal",
+              outcome: "detached",
+              elapsed_ms: Math.max(0, Date.now() - (activeWatcher?.startedAt || Date.now())),
+            },
+          });
+        }
+        throw err;
+      } finally {
+        combined.cleanup();
+        if (activeWatcher?.runId === params.run_id) activeWatcher = undefined;
+        void refreshStatus(ctx);
+      }
     },
   });
 
@@ -703,6 +902,43 @@ export default function (pi: ExtensionAPI) {
       const result = await cancelRun(params.run_id, { signal });
       void refreshStatus(ctx);
       return jsonResult(result);
+    },
+  });
+
+  pi.registerCommand("runs", {
+    description: "Show durable Run presence or detach the current foreground Run watcher",
+    handler: async (args, ctx) => {
+      const action = String(args || "").trim().toLowerCase();
+      if (action === "detach") {
+        if (!activeWatcher) {
+          if (ctx.hasUI) ctx.ui.notify("No foreground Run watcher is attached", "info");
+          return;
+        }
+        const runId = activeWatcher.runId;
+        const label = displayNameForRun(activeWatcher.lastRun || { run_id: runId });
+        activeWatcher.controller.abort();
+        if (ctx.hasUI) ctx.ui.notify(`${label}: detached; Run continues in runwatch`, "info");
+        return;
+      }
+      const overview = await statusOverview({ timeout_ms: 900 });
+      const summary = summarizePiRunsStatus(
+        overview.runs,
+        overview.backend,
+        bridgeDeliveries,
+        bridgeState,
+        {
+          session_id: ctx.sessionManager.getSessionId(),
+          project_root: ctx.sessionManager.getCwd(),
+          attached_run_id: activeWatcher?.runId,
+          attached_elapsed_ms: activeWatcher?.elapsedMs,
+          wait_state: activeWatcher?.state,
+        },
+      );
+      if (ctx.hasUI) {
+        const lines = presenceWidgetLines(summary.presence, 12) || [summary.text];
+        ctx.ui.setWidget(WIDGET_KEY, lines);
+        ctx.ui.notify(summary.text, summary.tone === "warning" ? "warning" : "info");
+      }
     },
   });
 

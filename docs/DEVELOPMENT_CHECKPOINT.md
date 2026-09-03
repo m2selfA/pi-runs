@@ -22,14 +22,14 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 
 ## Frozen architecture decisions
 
-1. Long jobs default to `runs_submit -> continuation armed -> end turn`; foreground `runs_wait` is nevertheless a supported run-to-completion observer when waiting is explicitly part of the current task. The Run remains owned by runwatch, and watcher timeout/abort must never imply Run cancellation.
+1. Every long job begins with `runs_submit` so runwatch owns the durable Run before observation mode is chosen. Foreground/background is dependency-driven: if the next reasoning step needs the result, `runs_wait` may stay attached without a user-level deadline; explicit concurrency/unattended work detaches into durable continuation. Watcher detach/timeout/abort must never imply Run cancellation.
 2. Pi session identity is captured from extension context, not supplied by the model.
 3. Target continuation binding includes session file/id and origin leaf, not only session_id.
 4. The runwatch daemon is the target canonical backend; `~/.pi/runs`, local runners and wakeups are legacy migration paths.
-5. pi-runs should gain a runwatch client abstraction before deleting the legacy backend, so migration is staged and testable.
+5. Active Run operations go through the runwatch client/backend abstraction; the retired legacy backend remains archive-only and must never become a fallback authority.
 6. Remote science workspace manipulation stays in pi-ssh-tools; runwatch/pi-runs only carry `RemoteWorkspaceRef` metadata and Run observability.
 7. Tool failures throw; cancellation propagates; output is bounded; Pi-native lifecycle hooks are used for live session registration.
-8. Pi is the only Agent Integration target for the current v1 release. Other coding-agent integrations are design backlog only until `runwatch` + `pi-runs` v1 is complete; they must not expand pi-runs or turn runwatch into an agent-specific host.
+8. Pi remains the only Agent Integration target through the current `0.2.x` line. Future coding-agent integrations belong in separate projects and must not expand pi-runs or turn runwatch into an agent-specific host.
 
 ## Milestones
 
@@ -47,8 +47,8 @@ pi-runs does not import pi-ssh-tools; it may detect its tools and guide the mode
 | R7 | unattended/fault matrix with remote HPC | **completed — core crash/restart matrix 2026-08-31; formal multi-hour mixed Local+Slurm endurance closed by authority #11 on 2026-09-03** |
 | R8 | Pi-first v1 production closure | **completed 2026-09-03 — installation/readiness, real-Pi release gates, formal endurance, legacy retirement and final RC replay all green** |
 | P1 | Post-v0.1.0 foreground `runs_wait` semantics correction | **completed 2026-09-04 — observable sliced wait, detach-only abort/timeout, docs/Skill and Pi loader/default regressions green** |
-| P2 | Long-wait familiar UX + persistent Run presence redesign | **design completed 2026-09-04 — implementation pending; no runtime changes in this phase** |
-| R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred post-v1 — design only; no Codex/other-agent project work until runwatch + pi-runs v1 is complete** |
+| P2 | Long-wait familiar UX + persistent Run presence | **completed 2026-09-04 — unbounded/reconnectable wait, automatic names, persistent presence UI, `/runs detach`, real Pi RPC/live gates green** |
+| R9 | Export AgentAdapter lessons to future non-Pi integrations | **deferred to separate future projects — v1 is complete, but non-Pi integration is intentionally outside pi-runs 0.2.x** |
 
 ## P0 repository baseline — completed 2026-09-02
 
@@ -488,7 +488,7 @@ The functional Pi path is now release-qualified. R8 turned it into a repeatable 
 - [x] `npm pack --dry-run --json` still contains **23 files / 193,145 bytes unpacked** and no `legacy/` runtime surface. Package metadata remains `0.1.0` in the worktree for now; this P1 commit does not rewrite, move or retag the historical local `v0.1.0` release.
 - [x] P1 is closed as post-v0.1.0 work. `docs/V1_RELEASE_CANDIDATE.md`, `docs/RELEASE_NOTES_v0.1.0.md`, the v0.1.0 tag and its qualification evidence remain historical release records rather than being retroactively edited.
 
-### P2 — long-wait familiar UX + persistent Run presence redesign — design completed 2026-09-04
+### P2 — long-wait familiar UX + persistent Run presence — implementation completed 2026-09-04
 
 Research/design conclusions:
 
@@ -504,17 +504,43 @@ Research/design conclusions:
 - [x] Promoted human-readable Run naming into the presence design **without making naming a user requirement**. `runs_submit.name` stays optional; explicit/inferred names are used when available, otherwise pi-runs generates and durably persists a short deterministic `display_name`. The fallback prefers safe semantic stems, rejects raw arguments/paths/secrets/high-entropy tokens, and falls back to a stable mnemonic pair when needed. Run id/JobID remain secondary display details and `run_id` remains the only authoritative identity.
 - [x] Defined stable collision handling for generated names: do not rename an existing Run or use unstable `(2)`/timestamp counters; append a deterministic mnemonic suffix to the newer conflicting label (for example `refine-map-cedar`). The display name survives Pi/runwatch restart and scheduler retry/Attempt changes because it is generated once and persisted with the durable Run.
 
-Implementation plan (next phase, not yet executed):
+Implementation plan / progress:
 
-1. Change `runs_wait` option normalization so omitted `timeout_ms` is unbounded from the user perspective while each daemon `wait_run` slice stays bounded; keep explicit finite timeout compatibility.
-2. Add transient runwatch reconnect/backoff semantics to the foreground watcher, with visible `reconnecting` progress and fail-closed handling for semantic/protocol errors.
-3. Add the optional-name resolution pipeline and extend the pure status projection into `RunPresence`: explicit/inferred name -> safe semantic stem -> deterministic mnemonic fallback, persisted once with the Run; cover stable collision suffixing, privacy rejection and restart/retry stability independently of Pi UI.
-4. Upgrade the `pi-runs` status entry from count-only output to a prioritized named foreground/current-session representation with narrow-terminal count fallback; clear when genuinely idle.
-5. Add compact `setWidget` task presence for active/attention Runs and a user-only `/runs` dashboard/action surface. Do not add model-facing tools or duplicate `pi-ssh-tools` workspace operations.
-6. Add deduplicated terminal transition notification and bounded UX-only seen metadata; verify exact-session routing and restart/resume reconstruction.
-7. Add explicit acceptance for: multi-hour/unbounded foreground success; foreground failure return; Escape/detach while Run continues; Pi restart while Run lives; runwatch restart/reconnect during wait; async Run visible after switching away/back; omitted-name auto generation; explicit-name preservation; generated-name privacy fallback; stable duplicate-name disambiguation; display-name stability across restart/retry; multi-Run prioritization; coalesced completion/failure attention; wrong-session notification rejection; headless partial-update path.
+1. [x] Change `runs_wait` option normalization so omitted `timeout_ms` is unbounded from the user perspective while each daemon `wait_run` slice stays bounded; explicit finite timeout compatibility remains.
+2. [x] Add transient runwatch reconnect/backoff semantics to the foreground watcher, with visible `reconnecting` progress and fail-closed handling for semantic/protocol errors.
+3. [x] Add the optional-name resolution pipeline and extend the pure status projection into `RunPresence`: explicit/inferred name -> safe semantic stem -> deterministic mnemonic fallback, persisted once with the Run; cover stable collision suffixing, privacy rejection and restart/retry stability independently of Pi UI.
+4. [x] Upgrade the `pi-runs` status entry from count-only output to a prioritized named foreground/current-session/same-project representation with narrow-terminal count fallback; clear when genuinely idle.
+5. [x] Add compact `setWidget` task presence for active/attention Runs and a user-only `/runs` dashboard plus `/runs detach` observer action. No model-facing tool or duplicate workspace operation was added.
+6. [x] Add current-session terminal-transition notification with foreground-completion suppression, coalescing and bounded in-memory status history. Restart/resume Run presence is reconstructed from runwatch; completion reasoning still routes through exact-session durable Delivery rather than UI notification state.
+7. [x] Add/execute practical P2 acceptance across unbounded/reconnect/abort semantics, naming privacy/stability/collision behavior, multi-session presence prioritization, real Pi RPC command/UI registration, real Pi extension loading and the existing exact-session live Delivery regression. Formal historical v0.1.0 endurance evidence is not rewritten; P2's new observer semantics are covered by focused deterministic tests rather than pretending the old v1 soak exercised this post-release UI path.
 
-P2 changes only `docs/design.md` and this checkpoint. Active runtime, `v0.1.0` tag/release notes and formal v1 endurance evidence remain untouched.
+P2a implementation evidence:
+
+- [x] `normalizeWaitOptions()` now treats omitted `timeout_ms` as `null`/unbounded rather than injecting a 30-second default; `timeout_ms=0` remains an explicit immediate bounded observation.
+- [x] `waitRun()` keeps every daemon `wait_run` request bounded by `interval_ms`, but a user-level unbounded watcher loops until its condition or AbortSignal. Terminal recognition now includes `timed_out` and `lost` as well as succeeded/failed/cancelled.
+- [x] Local IPC request errors are classified as transport / protocol / remote / aborted. Only transport failures reconnect; daemon semantic errors and malformed/correlation/protocol failures remain fail-closed.
+- [x] Transient transport failure emits `state=reconnecting`, retry/backoff metadata and the last known Run snapshot, then retries with bounded exponential backoff. Timeout/Abort still never emits `cancel_run`.
+- [x] Focused P2a backend/client regression: `node --test test/runwatch-client.test.mjs test/backend.test.mjs` — **23 passed / 0 failed**, including unbounded-to-terminal, reconnect-after-disconnect, semantic-error-no-retry, explicit timeout detach and abort-with-zero-cancel coverage.
+
+
+P2b/P2c implementation evidence:
+
+- [x] Added `src/naming.mjs`. Explicit `name` remains optional; missing names use a safe semantic task/script stem when possible and a deterministic adjective+noun mnemonic otherwise. URLs, absolute paths, opaque UUID/hex/base64-like material and shell-command payloads are not copied into fallback names. Active/attention collisions get a stable mnemonic suffix; succeeded/cancelled history does not unnecessarily poison a natural name.
+- [x] Ambiguous `runs_submit` retries with the same `run_id` reuse the already-persisted Run name before any new generation, preserving submission idempotency even if the surrounding Run list changed. Legacy opaque persisted names remain submission-stable while `displayNameForRun()` projects a readable mnemonic for UI only.
+- [x] `runs_submit` now resolves the final name before submission and runwatch already persists `RunRecord.name`; submit/wait/status/cancel Run snapshots expose `display_name` without changing `run_id` authority or requiring a runwatch schema migration.
+- [x] Added pure `RunPresence` projection and priority order: attached -> current-session live/attention -> same-project live -> global attention -> unrelated live. Footer now uses readable names (`Runs ● full-tests`, `Runs ↻ full-tests [attached]`) and avoids contradictory `Runs idle · N other live`; a same-project Run remains named after switching Pi session while truly unrelated Runs compress to counts.
+- [x] Added compact presence widget (up to four rows in the passive dock, up to twelve from `/runs`) and user-only `/runs detach`. The active wait owns its own AbortController; command detach returns `wait_observation.outcome=detached` and leaves runwatch/Run cancellation untouched. The first wait update performs a best-effort snapshot so the user normally sees the readable name immediately rather than an opaque Run id.
+- [x] Added bounded current-session terminal transition tracking (max 256 Run statuses) plus max-32 foreground completion suppression. Detached terminal transitions notify once while Pi UI is active and simultaneous transitions coalesce; foreground completion normally does not duplicate-notify. This UX state has no lifecycle/cancellation authority.
+- [x] Focused naming/presence/client/backend suite — **43 passed / 0 failed** before the final same-project/name-retry hardening; subsequent naming+presence suite — **23 passed / 0 failed**.
+- [x] Full runtime regression after P2 core/UI integration — **79 passed / 0 failed / 1 skipped** (80 total), including the real Pi extension loader. A final full replay including the new RPC command regression is required in closeout below.
+- [x] Real Pi RPC no-provider smoke passed **1/1**: `get_commands` exposes `runs` as an extension command; `/runs detach` executes immediately and emits the expected `notify`, while session presence emits real `setStatus` and `setWidget` extension UI requests.
+- [x] Explicit real-Pi live bridge replay (`PI_RUNS_REAL_LIVE_ACCEPTANCE=1`) passed **1/1** on the P2 extension, preserving failed-agent retry/durable Delivery behavior and exact-session completion evidence.
+
+- [x] Final P2 default regression on package version **0.2.0**: `npm test` — **81 passed / 0 failed / 1 skipped** (82 total), including real Pi extension loader + no-provider RPC command/UI smoke. Focused backend/client wait suite after finite-budget hardening is **24/24**.
+- [x] Final `npm pack --dry-run --json` reports **pi-runs@0.2.0**, **24 files / 222,171 bytes unpacked**, including the new `src/naming.mjs` and excluding `legacy/` plus all tests. `git diff --check` is clean.
+- [x] Main package metadata advances to `0.2.0` so post-release runtime behavior cannot masquerade as the historical `0.1.0` artifact. The local `v0.1.0` tag remains anchored to `<commit-hash>`; no historical release document/evidence is rewritten.
+
+P2 implementation is post-v0.1.0 runtime work. The historical `v0.1.0` tag/release notes and formal v1 endurance evidence remain untouched; no legacy backend or additional model-facing tool is reintroduced.
 
 ### Post-v1 AgentAdapter policy
 
