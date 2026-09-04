@@ -4,6 +4,14 @@
   "description": "Pi integration for durable long-running scientific Runs managed by runwatch.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m2selfA/pi-runs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/m2selfA/pi-runs/issues"
+  },
+  "homepage": "https://github.com/m2selfA/pi-runs#readme",
   "files": [
     "extensions/",
     "src/",
