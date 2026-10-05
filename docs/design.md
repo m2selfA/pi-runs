@@ -234,7 +234,7 @@ Show state, human name/run id, runner/job handle, elapsed time, observation heal
 
 ### Layer 2 — persistent footer dock
 
-Use the composable `ctx.ui.setStatus("pi-runs", ...)` entry as an **always-present dock whenever there is active or attention-worthy Run state**. Clear it when truly idle rather than spending permanent footer space on `Runs idle`.
+Use the composable `ctx.ui.setStatus("pi-runs", ...)` entry as an **always-present dock whenever there is active or actionable non-terminal Run state**. Clear it when there is no live Run, observation/control-plane issue, continuation, or rebind state; terminal history must not consume permanent footer space.
 
 Examples:
 
@@ -242,23 +242,23 @@ Examples:
 Runs ● refine 18m [attached]
 Runs ● 2 active · 1 other
 Runs ○ refine queued 4m · 2 other live
-Runs ⚠ refine failed · 1 other live
+Runs ⚠ refine · 1 probe issue
 Runs ⚠ 1 rebind · 2 active
 Runs ↻ reconnecting · 2 active
 ```
 
-Priority is: current foreground attachment -> current-session active Run -> current-session continuation/rebind/failure -> global failure/probe attention -> other live Runs. A current-session named Run should be shown directly when space permits; counts are the narrow-terminal fallback.
+Priority is: current foreground attachment -> current-session active Run -> current-session continuation/rebind/live observation issue -> other live Runs. Terminal success/failure/cancellation remains queryable history and gets a deduplicated transition notification, but does not remain in passive status. A current-session named Run should be shown directly when space permits; counts are the narrow-terminal fallback.
 
 ### Layer 3 — compact Run widget / dashboard
 
-When there are multiple Runs or attention state, use Pi's `setWidget` as a compact below-editor/above-editor task dock, inspired by Pi community background-task docks and long-task sidebars. Keep only a few prioritized rows visible so the conversation is not displaced:
+When there are multiple live Runs or non-terminal observation/control-plane attention, use Pi's `setWidget` as a compact below-editor/above-editor task dock, inspired by Pi community background-task docks and long-task sidebars. Keep only a few prioritized live rows visible so the conversation is not displaced; completed Run history belongs in the explicit dashboard:
 
 ```text
 Runs
 ▶ refine-map      running 18m   hpc.example/slurm #<job-id>   attached
 ● preprocess      running  7m   local/process        async
 ○ reconstruction  queued   3m   hpc.example/slurm #<job-id>
-! mask-fit        failed   11m ago                    attention
+! probe-tests     running  2m   local/process        observation
 ```
 
 The implemented `/runs` user command expands the presence list (up to twelve prioritized rows), and `/runs detach` provides the immediate foreground-to-background action. Additional user-only convenience actions such as attach/logs/cancel/rebind may be layered on later, but model-facing tools stay frozen and lifecycle authority remains in runwatch.

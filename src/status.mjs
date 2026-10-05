@@ -65,8 +65,9 @@ function executionState(status) {
   return "unknown";
 }
 
-function runAttention(run) {
+function runAttention(run, options = {}) {
   const status = String(run?.status || "unknown").toLowerCase();
+  if (options?.suppress_terminal_attention && isTerminal(status)) return undefined;
   if (["failed", "timed_out", "lost", "unknown"].includes(status)) return status;
   if (!KNOWN.has(status)) return "unknown";
   if (hasObservationAttention(run)) return "observation";
@@ -116,7 +117,7 @@ export function projectRunPresence(runs, options = {}) {
             : undefined,
         observation_health: run?.observation?.health,
         continuation: run?.continuation || "none",
-        attention: runAttention(run),
+        attention: runAttention(run, options),
         updated_at: run?.updated_at,
         session_id: normalizedSessionId(run),
         project_root: run?.project_root,
@@ -157,9 +158,18 @@ export function summarizePiRunsStatus(
   const otherRuns = currentSessionId
     ? allRuns.filter((run) => normalizedSessionId(run) !== currentSessionId)
     : [];
-  const summary = summarizeRuns(currentRuns);
-  const otherSummary = summarizeRuns(otherRuns);
-  const presence = projectRunPresence(allRuns, options);
+  const suppressTerminalAttention = options?.suppress_terminal_attention === true;
+  const visibleRuns = (runs) => suppressTerminalAttention
+    ? runs.filter((run) => !isTerminal(String(run?.status || "").toLowerCase()))
+    : runs;
+  const visibleCurrentRuns = visibleRuns(currentRuns);
+  const visibleOtherRuns = visibleRuns(otherRuns);
+  const summary = summarizeRuns(visibleCurrentRuns);
+  const otherSummary = summarizeRuns(visibleOtherRuns);
+  const presence = projectRunPresence(allRuns, {
+    ...options,
+    suppress_terminal_attention: suppressTerminalAttention,
+  });
   const pending = Number(deliveries?.pending || 0);
   const delivering = Number(deliveries?.delivering || 0);
   const retrying = Number(deliveries?.retrying || 0);
@@ -190,8 +200,8 @@ export function summarizePiRunsStatus(
       tone = reconnecting || primary.attention ? "warning" : "accent";
     }
   }
-  const observationAttention = currentRuns.filter(hasObservationAttention).length;
-  const otherObservationAttention = otherRuns.filter(hasObservationAttention).length;
+  const observationAttention = visibleCurrentRuns.filter(hasObservationAttention).length;
+  const otherObservationAttention = visibleOtherRuns.filter(hasObservationAttention).length;
 
   if (observationAttention > 0) {
     text += ` · ${observationAttention} probe issue${observationAttention === 1 ? "" : "s"}`;

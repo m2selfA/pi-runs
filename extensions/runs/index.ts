@@ -79,7 +79,7 @@ function combineAbortSignals(...signals: Array<AbortSignal | undefined>) {
 
 function presenceWidgetLines(presence: any[], maxRows = 4) {
   const visible = (Array.isArray(presence) ? presence : [])
-    .filter((item) => item?.live || item?.attention)
+    .filter((item) => item?.live)
     .slice(0, maxRows);
   if (visible.length < 2 && !visible.some((item) => item?.attention)) return undefined;
   const lines = ["Runs"];
@@ -189,6 +189,7 @@ export default function (pi: ExtensionAPI) {
           attached_run_id: activeWatcher?.runId,
           attached_elapsed_ms: activeWatcher?.elapsedMs,
           wait_state: activeWatcher?.state,
+          suppress_terminal_attention: true,
         },
       );
       const hasPresence = Boolean(

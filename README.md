@@ -68,7 +68,7 @@ Runs 2 other live
 Runs idle · 1 rebind
 ```
 
-The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. Active or attention-worthy Runs remain visible when the user switches away and comes back; same-project work is named when space permits, unrelated work is compressed to counts, and multi-Run/attention state gets a compact widget. `/runs` refreshes that dashboard and `/runs detach` converts the current foreground watcher to background without cancelling the Run. Terminal transitions for detached current-session work are coalesced/deduplicated as UI notifications; exact-session durable Delivery remains the continuation authority.
+The extension uses its own `pi-runs` status key rather than replacing Pi's footer, so it can coexist with `pi-ssh-tools` and other footer/status extensions. Live Runs (running or queued) and non-terminal observation/control-plane issues remain visible when the user switches away and comes back; same-project live work is named when space permits, unrelated live work is compressed to counts, and multi-Run state gets a compact widget. Terminal Runs leave the passive footer/widget after their transition notification; their durable records and logs remain available through `/runs`, `runs_status`, and `runs_logs`. `/runs` refreshes that dashboard and `/runs detach` converts the current foreground watcher to background without cancelling the Run. Terminal transitions for detached current-session work are coalesced/deduplicated as UI notifications; exact-session durable Delivery remains the continuation authority.
 
 ## Backend safety
 

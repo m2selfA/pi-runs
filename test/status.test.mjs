@@ -103,6 +103,52 @@ test("Pi status avoids contradictory idle wording when only unrelated Runs are l
   assert.equal(summary.text, "Runs 1 other live");
 });
 
+test("passive Pi status does not keep terminal history in the footer or presence", () => {
+  const summary = summarizePiRunsStatus(
+    [
+      { run_id: "failed-current", name: "old-tests", status: "failed", session_id: "current" },
+      { run_id: "timed-out-current", name: "old-timeout", status: "timed_out", session_id: "current" },
+      { run_id: "cancelled-current", name: "old-cancel", status: "cancelled", session_id: "current" },
+      { run_id: "lost-current", name: "old-lost", status: "lost", session_id: "current" },
+      { run_id: "succeeded-other", name: "old-build", status: "succeeded", session_id: "other" },
+    ],
+    "runwatch",
+    {},
+    "ok",
+    { session_id: "current", suppress_terminal_attention: true },
+  );
+  assert.equal(summary.text, "Runs idle");
+  assert.equal(summary.tone, "muted");
+  assert.equal(summary.attention, 0);
+  assert.equal(summary.global_attention, 0);
+  assert.ok(summary.presence.length >= 5);
+  for (const item of summary.presence) assert.equal(item.attention, undefined);
+});
+
+test("passive Pi status keeps live observation attention visible", () => {
+  const summary = summarizePiRunsStatus(
+    [
+      { run_id: "failed-current", name: "old-tests", status: "failed", session_id: "current" },
+      {
+        run_id: "probe-current",
+        name: "active-tests",
+        status: "running",
+        session_id: "current",
+        observation: { health: "unreachable", source: "transport" },
+      },
+    ],
+    "runwatch",
+    {},
+    "ok",
+    { session_id: "current", suppress_terminal_attention: true },
+  );
+  assert.equal(summary.text, "Runs ⚠ active-tests · 1 probe issue");
+  assert.equal(summary.tone, "warning");
+  assert.equal(summary.attention, 0);
+  assert.equal(summary.observation_attention, 1);
+  assert.equal(summary.presence.find((item) => item.run_id === "probe-current")?.attention, "observation");
+});
+
 test("Pi status never hides failures from another session", () => {
   const summary = summarizePiRunsStatus(
     [
